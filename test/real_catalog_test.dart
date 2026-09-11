@@ -18,9 +18,20 @@ import 'package:tchmaterial_quick_viewer/src/data/catalog_index.dart';
 import 'package:tchmaterial_quick_viewer/src/models/category.dart';
 import 'package:tchmaterial_quick_viewer/src/models/textbook.dart';
 
-/// 应用支持目录下的应用标识（与 pubspec 里的 org / project name 对应）。
-const String _appId = 'com.tchviewer.tchmaterial_quick_viewer';
+/// 应用支持目录下的应用标识（与各平台构建配置对应）。
+///
+/// Linux 用 pubspec 的 org + project name；macOS 用的是 Xcode bundle id，
+/// 两者不同 —— macOS 上 path_provider 取的是
+/// `macos/Runner/Configs/AppInfo.xcconfig` 里的 PRODUCT_BUNDLE_IDENTIFIER，
+/// 写成 Linux 那套会让这个用例在 macOS 上永远静默跳过。
 const String _subDir = 'tchmaterial_viewer';
+
+/// 与 `CatalogRepository._cacheSchemaVersion` 对应。
+const int _expectedCacheSchema = 1;
+
+String get _appId => Platform.isMacOS
+    ? 'com.tchviewer.tchmaterialQuickViewer'
+    : 'com.tchviewer.tchmaterial_quick_viewer';
 
 /// 定位目录缓存文件。
 ///
@@ -79,6 +90,9 @@ void main() {
   setUpAll(() {
     final payload =
         jsonDecode(cacheFile.readAsStringSync()) as Map<String, dynamic>;
+    // 结构版本对不上就明确跳过，而不是让一堆 TypeError 把整个文件炸掉。
+    expect(payload['schema'], _expectedCacheSchema,
+        reason: '目录缓存 schema 不匹配，请删掉缓存后重新运行一次应用');
     final root = _decodeNode(payload['tree'] as List);
     root.linkChildren();
     final books = (payload['books'] as List)
@@ -182,6 +196,57 @@ void main() {
       expect(book.dimensions['zxxxk'], '数学');
     }
     print('「数学 一年级」命中 ${results.length} 本');
+  });
+
+  test('教材落点必须是 tag_paths 那一支的后代（不跨分支）', () {
+    // 真实踩过的坑：某本《物理九年级全一册》的版别是「北师大版（主编：闫金铎）」，
+    // 而树里该学科下只有「北师大版（主编：郭玉英）」。旧的维度兜底逻辑在匹配不上
+    // 版别时会 `continue` 跳过它、拿「九年级」从根重新搜，于是这本书被挂进了另一个
+    // 版别的分支 —— 该分支计数被多算，用户也在错误的分类里看到它。
+    final jumped = <String>[];
+    var checked = 0;
+
+    for (final book in index.books) {
+      if (book.tagIds.length < 2) continue;
+      checked++;
+
+      // 按 tag_id 逐层走，得到平台给出的落点
+      CategoryNode? viaPath;
+      var cursor = index.root;
+      for (var i = 1; i < book.tagIds.length; i++) {
+        CategoryNode? next;
+        for (final child in cursor.children) {
+          if (child.id == book.tagIds[i]) {
+            next = child;
+            break;
+          }
+        }
+        if (next == null) break;
+        cursor = next;
+        viaPath = next;
+      }
+      if (viaPath == null) continue;
+
+      final placed = index.placementOf(book.id);
+      if (placed == null) continue;
+
+      var withinBranch = false;
+      for (CategoryNode? n = placed; n != null; n = n.parent) {
+        if (identical(n, viaPath)) {
+          withinBranch = true;
+          break;
+        }
+      }
+      if (!withinBranch) {
+        jumped.add('${book.title} → ${placed.displayPath}'
+            '（应属于 ${viaPath.displayPath}）');
+      }
+    }
+
+    expect(checked, greaterThan(2000));
+    expect(jumped, isEmpty,
+        reason: '这些教材被放到了 tag_paths 之外的分类分支：'
+            '${jumped.take(5).join('; ')}');
   });
 
   test('打印各学段教材数，便于人工核对', () {

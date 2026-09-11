@@ -30,36 +30,41 @@ class CategoryTreePanel extends StatefulWidget {
 }
 
 class _CategoryTreePanelState extends State<CategoryTreePanel> {
-  /// 已收起的节点。**必须用 [CategoryNode.uniqueKey] 而不是 id**：
-  /// 平台在不同父节点下复用同一批 tag_id（80 个「一年级」节点共用一个 id），
-  /// 用 id 当键会让「收起一个一年级」把全树所有的一年级一起收起。
-  final Set<String> _collapsed = <String>{};
+  /// **已展开**的节点。空集合 = 只有第一级可见。
+  ///
+  /// 用「已展开」而不是「已收起」有两个原因：
+  ///
+  /// 1. **空集合的语义必须是安全的。** 面板首次构建时 `CatalogController` 还是
+  ///    `CatalogIndex.empty`（数据在后续异步到达），`initState` 里拿不到任何子节点。
+  ///    如果状态是「已收起」，空集合就意味着「什么都没收起」= 递归铺开整棵树；
+  ///    真实时序下用户打开就是一片全展开的 1558 行，正是要避免的情况。
+  /// 2. 键必须用 [CategoryNode.uniqueKey] 而不是 id：平台在不同父节点下复用同一
+  ///    批 tag_id（80 个「一年级」共用一个 id），用 id 会让「收起一个一年级」
+  ///    把全树所有的一年级一起收起。
+  final Set<String> _expanded = <String>{};
 
-  /// 首次进入时只展开根节点，避免一次性渲染 1500+ 行。
-  @override
-  void initState() {
-    super.initState();
-    for (final child in widget.index.root.children) {
-      _collapsed.add(child.uniqueKey);
-    }
-  }
+  // 不需要 initState：空集合本身就表示「只展开第一级」，这也让数据异步到达时
+  // 天然保持正确，不必在 didUpdateWidget 里补折叠状态。
 
   @override
   void didUpdateWidget(CategoryTreePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 外部（搜索、面包屑跳转）改变了选中项时，展开到该节点的路径。
+    // 比较用 uniqueKey：同一个 tag_id 在树里会出现多次（80 个「一年级」），
+    // 用 id 比较会把「换了另一个同名的兄弟节点」误判成没变化。
     final selected = widget.selected;
-    if (selected != null && selected.id != oldWidget.selected?.id) {
+    if (selected != null &&
+        selected.uniqueKey != oldWidget.selected?.uniqueKey) {
       for (final node in selected.path) {
-        _collapsed.remove(node.uniqueKey);
+        _expanded.add(node.uniqueKey);
       }
     }
   }
 
   void _toggle(CategoryNode node) {
     setState(() {
-      if (!_collapsed.remove(node.uniqueKey)) {
-        _collapsed.add(node.uniqueKey);
+      if (!_expanded.remove(node.uniqueKey)) {
+        _expanded.add(node.uniqueKey);
       }
     });
   }
@@ -69,7 +74,7 @@ class _CategoryTreePanelState extends State<CategoryTreePanel> {
 
     void walk(CategoryNode node, int depth) {
       rows.add((node: node, depth: depth));
-      if (_collapsed.contains(node.uniqueKey)) return;
+      if (!_expanded.contains(node.uniqueKey)) return;
       for (final child in node.children) {
         walk(child, depth + 1);
       }
@@ -136,8 +141,8 @@ class _CategoryTreePanelState extends State<CategoryTreePanel> {
               return _CategoryRow(
                 node: row.node,
                 depth: row.depth,
-                selected: widget.selected?.id == row.node.id,
-                collapsed: _collapsed.contains(row.node.uniqueKey),
+                selected: widget.selected?.uniqueKey == row.node.uniqueKey,
+                collapsed: !_expanded.contains(row.node.uniqueKey),
                 onToggle: () => _toggle(row.node),
                 onSelect: () => widget.onSelect(row.node),
               );

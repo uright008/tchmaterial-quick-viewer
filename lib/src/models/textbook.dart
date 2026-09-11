@@ -15,7 +15,6 @@ class Textbook {
     this.coverUrls = const [],
     this.resourceTypeCode,
     this.updateTime,
-    this.pdfSizeBytes,
   });
 
   final String id;
@@ -36,7 +35,6 @@ class Textbook {
 
   final String? resourceTypeCode;
   final DateTime? updateTime;
-  final int? pdfSizeBytes;
 
   // —— 分类维度便捷访问 ——
 
@@ -73,7 +71,6 @@ class Textbook {
         if (coverUrls.length > 1) 'covers': coverUrls,
         if (resourceTypeCode != null) 'type': resourceTypeCode,
         if (updateTime != null) 'updated': updateTime!.toIso8601String(),
-        if (pdfSizeBytes != null) 'pdf_size': pdfSizeBytes,
       };
 
   factory Textbook.fromJson(Map<String, dynamic> json) {
@@ -98,7 +95,6 @@ class Textbook {
       coverUrls: covers,
       resourceTypeCode: json['type'] as String?,
       updateTime: DateTime.tryParse(json['updated'] as String? ?? ''),
-      pdfSizeBytes: (json['pdf_size'] as num?)?.toInt(),
     );
   }
 

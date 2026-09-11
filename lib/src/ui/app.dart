@@ -45,6 +45,11 @@ class _TchMaterialAppState extends State<TchMaterialApp> {
     _repository = CatalogRepository(api: _api, cache: widget.cacheStore);
     _catalog = CatalogController(_repository);
     _library = LibraryController(_repository);
+
+    // 把持久化的排序偏好灌进目录控制器。
+    // 原来这个值只存在 SettingsController 里，启动时没人同步过去，于是设置里
+    // 选好的「按书名」重启后自动变回「分类顺序」。
+    _catalog.setSortOrder(_settings.sortOrder);
   }
 
   @override

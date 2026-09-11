@@ -45,23 +45,6 @@ class Credentials {
       ? accessToken
       : '${accessToken.substring(0, 8)}…';
 
-  Credentials copyWith({
-    String? accessToken,
-    String? macKey,
-    int? diff,
-    String? userId,
-    DateTime? expiresAt,
-    bool clearMacKey = false,
-  }) {
-    return Credentials(
-      accessToken: accessToken ?? this.accessToken,
-      macKey: clearMacKey ? null : (macKey ?? this.macKey),
-      diff: diff ?? this.diff,
-      userId: userId ?? this.userId,
-      expiresAt: expiresAt ?? this.expiresAt,
-    );
-  }
-
   Map<String, dynamic> toJson() => {
         'access_token': accessToken,
         if (macKey != null) 'mac_key': macKey,

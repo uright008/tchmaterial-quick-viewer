@@ -29,6 +29,13 @@ class _BookDetailPageState extends State<BookDetailPage> {
   bool _loading = true;
   bool _withChapters = true;
 
+  /// 是否已经尝试过带章节加载。
+  ///
+  /// 原来那个「加载章节目录」入口只是把 `_withChapters` 取反成 false，于是
+  /// `if (_withChapters && ...)` 恒为假 —— 点了永远不发请求，卡片纹丝不动。
+  /// 现在用它来区分「还没试」和「试过了，平台确实没有」。
+  bool _chaptersAttempted = false;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +57,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
       setState(() {
         _detail = detail;
         _loading = false;
+        if (_withChapters) _chaptersAttempted = true;
       });
     } catch (error) {
       if (!mounted) return;
@@ -101,7 +109,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
                   const SizedBox(height: 20),
                   _ChaptersSection(
                     detail: _detail!,
-                    onToggleLoad: _toggleChapters,
+                    attempted: _chaptersAttempted,
+                    onToggleLoad: _loadWithChapters,
                     onJump: _openReaderAtPage,
                   ),
                 ],
@@ -120,11 +129,11 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  Future<void> _toggleChapters() async {
-    setState(() => _withChapters = !_withChapters);
-    if (_withChapters && (_detail?.chapters.isEmpty ?? true)) {
-      await _load();
-    }
+  /// 显式带上章节重新加载一次。
+  Future<void> _loadWithChapters() async {
+    if (_withChapters && _chaptersAttempted) return;
+    setState(() => _withChapters = true);
+    await _load();
   }
 
   Future<void> _openOnPlatform() async {
@@ -486,11 +495,15 @@ class _FileRow extends StatelessWidget {
 class _ChaptersSection extends StatelessWidget {
   const _ChaptersSection({
     required this.detail,
+    required this.attempted,
     required this.onToggleLoad,
     required this.onJump,
   });
 
   final TextbookDetail detail;
+
+  /// 是否已经发起过带章节的加载。没试过才给「加载目录」入口。
+  final bool attempted;
   final Future<void> Function() onToggleLoad;
   final void Function(int page) onJump;
 
@@ -499,13 +512,25 @@ class _ChaptersSection extends StatelessWidget {
     final theme = Theme.of(context);
 
     if (detail.chapters.isEmpty) {
+      if (!attempted) {
+        return Card(
+          child: ListTile(
+            leading: const Icon(Icons.toc_outlined),
+            title: const Text('加载章节目录'),
+            subtitle: const Text('平台未在默认加载中返回目录，可尝试单独拉取'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: onToggleLoad,
+          ),
+        );
+      }
+      // 试过了确实没有：给一句确切的说明，而不是留一个点了没反应的入口。
       return Card(
         child: ListTile(
           leading: const Icon(Icons.toc_outlined),
-          title: const Text('加载章节目录'),
-          subtitle: const Text('平台未在默认加载中返回目录，可尝试单独拉取'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: onToggleLoad,
+          title: const Text('没有章节目录'),
+          subtitle: const Text(
+            '平台未为这本教材提供章节信息，PDF 自身也没有书签。',
+          ),
         ),
       );
     }

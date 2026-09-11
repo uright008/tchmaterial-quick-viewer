@@ -22,7 +22,6 @@ class SettingsStore {
   static const _kThemeMode = 'theme_mode';
   static const _kSortOrder = 'sort_order';
   static const _kAutoOpenNative = 'auto_open_native';
-  static const _kMaxConcurrentDownloads = 'max_concurrent_downloads';
 
   Credentials readCredentials() {
     final raw = _prefs.getString(_kCredentials);
@@ -56,11 +55,6 @@ class SettingsStore {
   bool readAutoOpenNative() => _prefs.getBool(_kAutoOpenNative) ?? false;
   Future<void> writeAutoOpenNative(bool value) =>
       _prefs.setBool(_kAutoOpenNative, value);
-
-  int readMaxConcurrentDownloads() =>
-      _prefs.getInt(_kMaxConcurrentDownloads) ?? 3;
-  Future<void> writeMaxConcurrentDownloads(int value) =>
-      _prefs.setInt(_kMaxConcurrentDownloads, value);
 }
 
 /// 磁盘缓存与下载目录。
@@ -135,12 +129,6 @@ class CacheStore {
   }
 
   File get _catalogFile => File('${root.path}/catalog_v1.json');
-
-  Directory get coversDir {
-    final dir = Directory('${root.path}/covers');
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir;
-  }
 
   Future<void> writeCatalog(Map<String, dynamic> payload) async {
     await _catalogFile.writeAsString(jsonEncode(payload), flush: true);

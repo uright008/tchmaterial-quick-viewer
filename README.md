@@ -62,16 +62,19 @@ flutter build apk --release --split-per-abi
 ## 🧪 测试
 
 ```bash
-flutter test     # 91 个用例
+flutter test     # 96 个用例
 ```
 
-分五组：
+分七组：
 
 - `nd_auth_test.dart` —— 签名算法。期望值由参考项目的 Python 实现生成，逐字节比对
 - `catalog_index_test.dart` —— 分类树解析与归属，含平台复用 `tag_id` 的回归用例
 - `credentials_test.dart` —— Cookie / JSON / 裸 token 三种粘贴形式的解析
-- `anonymous_access_test.dart` —— 「匿名到底匿名到什么程度」的约束用例
-- `real_catalog_test.dart` —— 用**真实平台缓存**校验父子计数等结构不变量（无缓存时自动跳过）
+- `anonymous_access_test.dart` —— 用 `MockClient` **拦截真实发出的请求头**，
+  约束「匿名就是真匿名」「公开接口不泄露凭据」
+- `real_catalog_test.dart` —— 用**真实平台缓存**校验结构不变量：父子计数、教材总数、
+  以及「落点必须是 `tag_paths` 那一支的后代」（无缓存时自动跳过；可用环境变量
+  `TCHVIEWER_CATALOG` 指定缓存路径）
 - `outline_panel_test.dart` —— 目录面板：默认只展开第一级、逐级展开/收起、无「全部展开」入口
 - `category_tree_panel_test.dart` —— 分类树：默认不递归展开、共享 `tag_id` 的两个节点能独立收起
 - `widget_test.dart` —— 分类树面板与书卡渲染

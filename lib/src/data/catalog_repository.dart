@@ -5,7 +5,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
 
 import '../core/api_client.dart';
 import '../models/category.dart';
@@ -52,10 +51,10 @@ class CatalogRepository {
         onProgress?.call(CatalogProgress(stage, message, fraction));
 
     report(CatalogStage.checking, '正在检查教材版本…');
-    final version = await _fetchModuleVersion();
+    final cachedVersion = await _tryFetchModuleVersion();
 
     if (allowCache && !forceRefresh) {
-      final cached = await _readCache(version);
+      final cached = await _readCache(cachedVersion);
       if (cached != null) {
         report(CatalogStage.done, '已从本地缓存载入 ${cached.bookCount} 本教材');
         return cached;
@@ -70,25 +69,29 @@ class CatalogRepository {
     );
 
     report(CatalogStage.bookList, '正在获取教材列表…', 0.15);
-    final partUrls = await _fetchPartUrls();
+    final meta = await _fetchDataVersion();
+    final partUrls = meta.partUrls;
     if (partUrls.isEmpty) {
       throw ApiException('平台未返回任何教材列表分片，可能是接口结构调整。');
     }
 
     final books = <Textbook>[];
+    final failedParts = <String>[];
     var completed = 0;
     // 分片之间互不依赖，并发拉取；每个分片约 10 MB，并发 3 路足够且不至于被限流。
     const parallelism = 3;
     for (var start = 0; start < partUrls.length; start += parallelism) {
       final batch = partUrls.skip(start).take(parallelism).toList();
       final results = await Future.wait(
-        batch.map((url) => _api.getJson(url).then(
-              (json) => _parseBookList(json),
-              onError: (Object error) {
-                // 单个分片失败不该让整个目录不可用。
-                return <Textbook>[];
-              },
-            )),
+        batch.map((url) async {
+          try {
+            return _parseBookList(await _api.getJson(url));
+          } catch (_) {
+            // 记下来，但不要静默吞掉：少一个分片就是少约 1/4 的教材。
+            failedParts.add(url);
+            return const <Textbook>[];
+          }
+        }),
       );
       for (final list in results) {
         books.addAll(list);
@@ -106,35 +109,60 @@ class CatalogRepository {
     }
 
     report(CatalogStage.indexing, '正在解析分类…', 0.85);
-    final index = buildCatalogIndex(root: root, books: books, version: version);
+    final index = buildCatalogIndex(
+      root: root,
+      books: books,
+      version: meta.version ?? 0,
+      failedParts: failedParts.length,
+    );
 
-    // 缓存不阻塞首屏：写盘失败（磁盘满/权限）时仍然返回结果。
-    unawaited(_writeCache(index).catchError((_) {}));
+    // 只有完整拿到全部分片才写缓存。
+    // 残缺数据一旦以「当前平台版本号」落盘，下次启动会因为版本号相同而被直接
+    // 采用，用户会永久少掉那部分教材且毫无察觉。
+    if (failedParts.isEmpty && meta.version != null) {
+      unawaited(_writeCache(index).catchError((_) {}));
+    }
 
-    report(CatalogStage.done, '已载入 ${index.bookCount} 本教材');
+    report(
+      CatalogStage.done,
+      failedParts.isEmpty
+          ? '已载入 ${index.bookCount} 本教材'
+          : '已载入 ${index.bookCount} 本教材（${failedParts.length}/'
+              '${partUrls.length} 个分片失败，本次结果不写入缓存）',
+    );
     return index;
   }
 
-  Future<int> _fetchModuleVersion() async {
+  /// 一次请求同时取回平台版本号与分片地址（两者本来就在同一个文件里）。
+  ///
+  /// 以前这里发了两次一模一样的 GET，白白多一次大接口往返。
+  Future<({int? version, List<String> partUrls})> _fetchDataVersion() async {
+    final json = await _api.getJson(PlatformEndpoints.materialDataVersion);
+    if (json is! Map) {
+      throw ApiException('平台版本接口返回了非预期结构。');
+    }
+    final rawVersion = json['module_version'];
+    final rawUrls = json['urls'];
+    return (
+      version: rawVersion is num ? rawVersion.toInt() : null,
+      partUrls: rawUrls is String
+          ? rawUrls
+              .split(',')
+              .map((u) => u.trim())
+              .where((u) => u.isNotEmpty)
+              .toList()
+          : const <String>[],
+    );
+  }
+
+  Future<int?> _tryFetchModuleVersion() async {
     try {
       final json = await _api.getJson(PlatformEndpoints.materialDataVersion);
       final version = json is Map ? json['module_version'] : null;
-      return version is num ? version.toInt() : 0;
+      return version is num ? version.toInt() : null;
     } catch (_) {
-      // 版本探测失败不致命：当作 0，走正常的重新拉取流程。
-      return 0;
+      return null;
     }
-  }
-
-  Future<List<String>> _fetchPartUrls() async {
-    final json = await _api.getJson(PlatformEndpoints.materialDataVersion);
-    final urls = json is Map ? json['urls'] : null;
-    if (urls is! String) return const [];
-    return urls
-        .split(',')
-        .map((u) => u.trim())
-        .where((u) => u.isNotEmpty)
-        .toList();
   }
 
   List<Textbook> _parseBookList(dynamic json) {
@@ -241,11 +269,16 @@ class CatalogRepository {
 
   // —— 磁盘缓存 ——
 
-  Future<CatalogIndex?> _readCache(int expectedVersion) async {
+  Future<CatalogIndex?> _readCache(int? expectedVersion) async {
     final payload = await _cache.readCatalog();
     if (payload == null) return null;
     if (payload['schema'] != _cacheSchemaVersion) return null;
-    if ((payload['version'] as num?)?.toInt() != expectedVersion) return null;
+    // expectedVersion 为 null 表示版本探测失败（多半是断网）：
+    // 此时应当信任磁盘上的缓存，让离线阅读可用，而不是整库重下。
+    if (expectedVersion != null &&
+        (payload['version'] as num?)?.toInt() != expectedVersion) {
+      return null;
+    }
 
     try {
       final rootJson = payload['tree'];
@@ -263,7 +296,7 @@ class CatalogRepository {
       return buildCatalogIndex(
         root: root,
         books: books,
-        version: expectedVersion,
+        version: (payload['version'] as num?)?.toInt() ?? 0,
       );
     } catch (_) {
       // 缓存结构对不上就当没有，让上层重新下载。
@@ -309,15 +342,10 @@ class CatalogRepository {
     String contentId, {
     bool isTchMaterialPage = true,
     bool withChapters = true,
-    ContentRef? ref,
   }) async {
-    final contentRef = ref ??
-        ContentRef(
-          contentId: contentId,
-          contentType: 'assets_document',
-        );
-
-    final url = contentRef.detailUrl(isTchMaterialPage: isTchMaterialPage);
+    final url = isTchMaterialPage
+        ? PlatformEndpoints.materialDetail(contentId)
+        : PlatformEndpoints.specialEduDetail(contentId);
     final data = await _fetchDetailJson(contentId, url, isTchMaterialPage);
 
     final rootTitle = _localizedText(data['global_title']) ??
@@ -590,7 +618,6 @@ class CatalogRepository {
     required String fileName,
     String? subdir,
     void Function(int received, int? total)? onProgress,
-    void Function(http.StreamedResponse response)? onResponse,
     CancelToken? cancelToken,
   }) async {
     final target = File(
@@ -603,7 +630,6 @@ class CatalogRepository {
     await target.parent.create(recursive: true);
 
     final response = await _api.sendGet(url);
-    onResponse?.call(response);
 
     if (response.statusCode != 200 && response.statusCode != 206) {
       throw ApiException(

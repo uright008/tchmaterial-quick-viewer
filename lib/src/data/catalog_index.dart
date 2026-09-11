@@ -24,7 +24,9 @@ class CatalogIndex {
     required this.books,
     required this.booksById,
     required this.booksByNode,
+    required this.placementByBookId,
     required this.version,
+    required this.failedParts,
     required this.uncategorizedCount,
   });
 
@@ -33,6 +35,12 @@ class CatalogIndex {
 
   final List<Textbook> books;
   final Map<String, Textbook> booksById;
+
+  /// 教材 id → 它最终被挂到的分类节点。
+  ///
+  /// 有了它才能断言「落点必须是 tag_path 落点的后代」，把跨分支跳级这类
+  /// 错误挡住（见 `test/real_catalog_test.dart`）。
+  final Map<String, CategoryNode> placementByBookId;
 
   /// 节点唯一键（[CategoryNode.uniqueKey]，即 tag_id 路径）→
   /// 该节点**及其所有后代**下的教材。
@@ -43,6 +51,12 @@ class CatalogIndex {
 
   /// 平台 `module_version`，用于缓存失效判断。
   final int version;
+
+  /// 本次加载失败的教材分片数（0 表示数据完整）。
+  ///
+  /// 分片失败意味着少了成百上千本书。这里如实记录，并在有失败时禁止写缓存，
+  /// 免得残缺目录以「当前平台版本」落盘后被永久沿用。
+  final int failedParts;
 
   final int uncategorizedCount;
 
@@ -55,6 +69,9 @@ class CatalogIndex {
       booksByNode[node.uniqueKey] ?? const [];
 
   Textbook? bookById(String id) => booksById[id];
+
+  /// 这本书最终落在哪个分类节点下。
+  CategoryNode? placementOf(String bookId) => placementByBookId[bookId];
 
   /// 按关键词做多词 AND 搜索，覆盖书名与全部维度名。
   List<Textbook> search(String query, {int limit = 300}) {
@@ -92,7 +109,13 @@ class _EmptyCatalogIndex implements CatalogIndex {
   @override
   Map<String, List<Textbook>> get booksByNode => const {};
   @override
+  Map<String, CategoryNode> get placementByBookId => const {};
+  @override
+  CategoryNode? placementOf(String bookId) => null;
+  @override
   int get version => 0;
+  @override
+  int get failedParts => 0;
   @override
   int get uncategorizedCount => 0;
   @override
@@ -154,10 +177,11 @@ CatalogIndex buildCatalogIndex({
   required CategoryNode root,
   required List<Textbook> books,
   int version = 0,
+  int failedParts = 0,
 }) {
   final booksByNode = <String, List<Textbook>>{};
+  final placementByBookId = <String, CategoryNode>{};
   final booksById = <String, Textbook>{};
-  final lookup = dimensionNameLookup(root);
 
   var uncategorized = 0;
 
@@ -169,9 +193,11 @@ CatalogIndex buildCatalogIndex({
     // tag_paths 走不通（或只走了一半）时，用 tag_list 的维度名继续下钻，
     // 取能到达更深的那一个。
     if (target == null || target == root || target.children.isNotEmpty) {
-      final byDims = _resolveByDimensions(root, book, lookup);
-      if (byDims != null &&
-          (target == null || byDims.depth > target.depth)) {
+      // 关键：以 tag_path 的落点为基准下钻，而不是从 root 重新开始。
+      // 这样维度细化只可能落在同一分支的更深处，不会跳到兄弟分支去。
+      final base = (target == null || target == root) ? root : target;
+      final byDims = _resolveByDimensions(base, book);
+      if (byDims != null && byDims.depth > (target?.depth ?? -1)) {
         target = byDims;
       }
     }
@@ -186,6 +212,7 @@ CatalogIndex buildCatalogIndex({
       if (node == root) continue;
       (booksByNode[node.uniqueKey] ??= <Textbook>[]).add(book);
     }
+    placementByBookId[book.id] = target;
     target.directBookCount++;
   }
 
@@ -205,7 +232,9 @@ CatalogIndex buildCatalogIndex({
     books: books,
     booksById: booksById,
     booksByNode: booksByNode,
+    placementByBookId: placementByBookId,
     version: version,
+    failedParts: failedParts,
     uncategorizedCount: uncategorized,
   );
 }
@@ -285,57 +314,62 @@ CategoryNode? _resolveByTagPath(CategoryNode root, List<String> tagIds) {
   return cursor;
 }
 
-/// 建 `维度|名称` → 节点 的查找表。
+/// 从 [start] 出发，用 `tag_list` 的维度名**沿树的实际层级**逐层下钻。
 ///
-/// 同一维度下同名节点在树里会重复出现（「一年级」挂在几十个版本节点下），
-/// 因此值是一个候选列表，由调用方按父子关系挑出正确的那一个。
-Map<String, List<CategoryNode>> dimensionNameLookup(CategoryNode root) {
-  final map = <String, List<CategoryNode>>{};
-  for (final node in root.descendants) {
-    final dim = node.dimensionId;
-    if (dim == null || dim.isEmpty) continue;
-    (map['$dim|${node.name}'] ??= <CategoryNode>[]).add(node);
-  }
-  return map;
-}
+/// 两个约束缺一不可，它们都是踩过坑才定下来的：
+///
+/// 1. **只看直接子节点**，不在整棵子树里捞同名节点。
+/// 2. **某一维找不到就地停下**（`break`），绝不跳过它继续用更下层的名字匹配。
+///
+/// 违规的后果是真实发生过的：某本《物理九年级全一册》的版别是
+/// 「北师大版（主编：闫金铎）」，而树里该学科下只有「北师大版（主编：郭玉英）」。
+/// 旧实现遇到版别匹配不上就 `continue`，接着拿「九年级」从根重新搜 —— 于是这本书
+/// 被挂进了**另一个版别**的分支，该分支计数被多算，用户也在错误的分类里看到它。
+///
+/// [start] 必须是 `tag_path` 已经确定的落点（而不是 root）：这样维度下钻只会在
+/// 平台给出的分支内部做细化，永远不会跨分支。
+CategoryNode? _resolveByDimensions(CategoryNode start, Textbook book) {
+  // 已经在路径上的维度不再重复匹配：`tag_path` 可能已经走到了「版本」，
+  // 这时要从「年级」接着往下看，而不是又从「学段」开始找。
+  final satisfied = <String>{
+    for (final node in start.path)
+      if (node.dimensionId != null && node.dimensionId!.isNotEmpty)
+        node.dimensionId!,
+  };
 
-/// 用 `tag_list` 的维度名从根逐层下钻，返回最深命中节点。
-///
-/// 每层都限定在上一层已命中节点的子树内，避免把「人教版 · 一年级」匹配到另一个
-/// 学科下的同名节点。
-CategoryNode? _resolveByDimensions(
-  CategoryNode root,
-  Textbook book,
-  Map<String, List<CategoryNode>> lookup,
-) {
-  CategoryNode cursor = root;
+  var cursor = start;
   CategoryNode? deepest;
 
   for (final dim in CategoryDimension.fallbackOrder) {
+    if (satisfied.contains(dim)) continue;
+
     final name = book.dimensions[dim];
     if (name == null || name.isEmpty) continue;
 
-    final hit = _pickDescendant(lookup['$dim|$name'], cursor);
-    if (hit == null) continue;
+    final hit = _directChild(cursor, dim, name);
+    if (hit == null) break;
     cursor = hit;
     deepest = hit;
   }
   return deepest;
 }
 
-/// 从候选里挑出位于 [ancestor] 子树中的节点（含自身）。
+/// 在 [parent] 的**直接子节点**里找指定维度同名的节点。
 ///
-/// 用父链上溯判断归属，复杂度 O(深度) —— 直接遍历子树在根节点上会是
-/// O(1500)，乘上几千本教材后开销明显。
-CategoryNode? _pickDescendant(
-  List<CategoryNode>? candidates,
-  CategoryNode ancestor,
+/// 「电子教材」这类容器层（dimension 为 [CategoryDimension.root]）是透明的：
+/// 合成根下面只有它，真正的学段/学科都挂在它下面，穿透它才能开始下钻。
+CategoryNode? _directChild(
+  CategoryNode parent,
+  String dimensionId,
+  String name,
 ) {
-  if (candidates == null || candidates.isEmpty) return null;
-  for (final candidate in candidates) {
-    for (CategoryNode? node = candidate; node != null; node = node.parent) {
-      if (identical(node, ancestor)) return candidate;
+  for (final child in parent.children) {
+    if (child.dimension == CategoryDimension.root) {
+      final inside = _directChild(child, dimensionId, name);
+      if (inside != null) return inside;
+      continue;
     }
+    if (child.dimensionId == dimensionId && child.name == name) return child;
   }
   return null;
 }

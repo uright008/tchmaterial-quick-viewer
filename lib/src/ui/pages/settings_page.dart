@@ -58,7 +58,7 @@ class SettingsPage extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: () => _testConnection(context),
                     icon: const Icon(Icons.network_check, size: 18),
-                    label: const Text('测试连接'),
+                    label: const Text('测试网络'),
                   ),
                   if (settings.hasCredentials)
                     TextButton.icon(

@@ -16,6 +16,20 @@ class SettingsController extends ChangeNotifier {
 
   final SettingsStore _store;
 
+  bool _disposed = false;
+
+  /// 释放后不再发通知：写偏好是异步的，窗口关闭时可能还在飞。
+  void _safeNotify() {
+    if (_disposed) return;
+    _safeNotify();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   late Credentials _credentials;
   late ThemeMode _themeMode;
   late SortOrder _sortOrder;
@@ -38,31 +52,31 @@ class SettingsController extends ChangeNotifier {
     final parsed = parseCredentials(rawInput);
     _credentials = parsed;
     await _store.writeCredentials(parsed);
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> clearCredentials() async {
     _credentials = Credentials.empty;
     await _store.writeCredentials(Credentials.empty);
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
     _themeMode = mode;
     await _store.writeThemeMode(_themeModeId(mode));
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> setSortOrder(SortOrder order) async {
     _sortOrder = order;
     await _store.writeSortOrder(order.id);
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> setAutoOpenNative(bool value) async {
     _autoOpenNative = value;
     await _store.writeAutoOpenNative(value);
-    notifyListeners();
+    _safeNotify();
   }
 
   static String _themeModeId(ThemeMode mode) => switch (mode) {

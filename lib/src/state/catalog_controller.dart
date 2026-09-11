@@ -15,6 +15,24 @@ class CatalogController extends ChangeNotifier {
 
   final CatalogRepository _repository;
 
+  bool _disposed = false;
+
+  /// 释放后不再发通知。
+  ///
+  /// 目录加载与下载都是异步的，窗口关闭 / 热重启时它们可能还在飞。回调里即使
+  /// 有 `mounted` 守卫也拦不住控制器本身 —— change notifier 一旦释放，
+  /// 再 notifyListeners() 会在 debug 下直接断言失败。
+  void _safeNotify() {
+    if (_disposed) return;
+    _safeNotify();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   CatalogIndex _index = CatalogIndex.empty;
   bool _loading = false;
   String? _error;
@@ -76,7 +94,7 @@ class CatalogController extends ChangeNotifier {
     if (_loading) return;
     _loading = true;
     _error = null;
-    notifyListeners();
+    _safeNotify();
 
     try {
       // 先用缓存快速出首屏，再在后台检查平台版本，避免每次启动都等 40 MB 下载。
@@ -84,10 +102,16 @@ class CatalogController extends ChangeNotifier {
         forceRefresh: forceRefresh,
         onProgress: (progress) {
           _progress = progress;
-          notifyListeners();
+          _safeNotify();
         },
       );
+      // 重新拉取后整棵树是**新建的对象**，旧的 _selected 指向已废弃的节点。
+      // 按 uniqueKey 在新树里找回同一个位置，避免选中态凭空丢失或错位。
+      final previousKey = _selected?.uniqueKey;
       _index = index;
+      if (previousKey != null) {
+        _selected = _findByUniqueKey(index.root, previousKey);
+      }
       _error = null;
     } on ApiException catch (error) {
       _error = error.message;
@@ -96,33 +120,35 @@ class CatalogController extends ChangeNotifier {
     } finally {
       _loading = false;
       _progress = null;
-      notifyListeners();
+      _safeNotify();
     }
   }
 
   void select(CategoryNode? node) {
     _selected = node;
     _query = '';
-    notifyListeners();
+    _safeNotify();
   }
 
   void setQuery(String value) {
     if (_query == value) return;
     _query = value;
-    notifyListeners();
-  }
-
-  void clearQuery() {
-    if (_query.isEmpty) return;
-    _query = '';
-    notifyListeners();
+    _safeNotify();
   }
 
   void setSortOrder(SortOrder order) {
     if (_sortOrder == order) return;
     _sortOrder = order;
-    notifyListeners();
+    _safeNotify();
   }
 
   CategoryNode? nodeById(String id) => _index.root.findById(id);
+
+  /// 按 uniqueKey 在新树里找回节点（刷新后重新定位选中项用）。
+  CategoryNode? _findByUniqueKey(CategoryNode root, String key) {
+    for (final node in root.descendants) {
+      if (node.uniqueKey == key) return node;
+    }
+    return null;
+  }
 }

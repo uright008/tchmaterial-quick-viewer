@@ -46,23 +46,15 @@ class PlatformEndpoints {
   static String materialDetail(String contentId) =>
       '$kFileHost1/zxx/ndrv2/resources/tch_material/details/$contentId.json';
 
-  static String nationalLessonDetail(String contentId) =>
-      '$kFileHost1/zxx/ndrv2/national_lesson/resources/details/$contentId.json';
 
   static String qualityCourseDetail(String contentId) =>
       '$kFileHost1/zxx/ndrv2/resources/$contentId.json';
 
-  static String prepareSubTypeDetail(String contentId) =>
-      '$kFileHost1/zxx/ndrv2/prepare_sub_type/resources/details/$contentId.json';
 
-  static String syncClassroomDetail(String contentType, String contentId) =>
-      '$kFileHost1/zxx/ndrv2/$contentType/resources/details/$contentId.json';
 
   static String specialEduDetail(String contentId) =>
       '$kFileHost1/zxx/ndrs/special_edu/resources/details/$contentId.json';
 
-  static String thematicCourseResources(String contentId) =>
-      '$kFileHost1/zxx/ndrs/special_edu/thematic_course/$contentId/resources/list.json';
 
   /// 教材配套音频（英语听力等）。
   static String relationAudios(String contentId) =>
@@ -85,46 +77,8 @@ class ApiException implements Exception {
   final int? statusCode;
   final String? url;
 
-  bool get isAuthFailure => statusCode == 401 || statusCode == 403;
-
   @override
   String toString() => message;
-}
-
-/// 解析出的资源引用（从用户粘贴的链接或教材 id 得到）。
-class ContentRef {
-  const ContentRef({
-    required this.contentId,
-    required this.contentType,
-    this.rootTitle,
-    this.rootEdition,
-  });
-
-  final String contentId;
-  final String contentType;
-  final String? rootTitle;
-  final String? rootEdition;
-
-  /// 教材详情接口路径。
-  String detailUrl({bool isTchMaterialPage = false}) {
-    switch (contentType) {
-      case 'national_lesson':
-        return PlatformEndpoints.nationalLessonDetail(contentId);
-      case 'quality_course':
-        return PlatformEndpoints.qualityCourseDetail(contentId);
-      case 'prepare_sub_type':
-        return PlatformEndpoints.prepareSubTypeDetail(contentId);
-      case 'assets_document':
-        return isTchMaterialPage
-            ? PlatformEndpoints.materialDetail(contentId)
-            : PlatformEndpoints.specialEduDetail(contentId);
-      default:
-        if (contentType == 'thematic_course') {
-          return PlatformEndpoints.specialEduDetail(contentId);
-        }
-        return PlatformEndpoints.syncClassroomDetail(contentType, contentId);
-    }
-  }
 }
 
 /// 带平台鉴权头的 HTTP 客户端。
@@ -204,24 +158,12 @@ class PlatformApi {
   }
 
   /// 流式 GET，用于大文件下载并汇报进度。
-  Future<http.StreamedResponse> sendGet(
-    String url, {
-    bool sign = true,
-    Map<String, String> extraHeaders = const {},
-    int? rangeStart,
-    int? rangeEnd,
-  }) async {
+  Future<http.StreamedResponse> sendGet(String url, {bool sign = true}) async {
     final request = http.Request('GET', Uri.parse(url));
     request.headers.addAll(headersFor(url));
     if (!sign) {
       request.headers['X-ND-AUTH'] = 'MAC id="0",nonce="0",mac="0"';
     }
-    request.headers.addAll(extraHeaders);
-    if (rangeStart != null) {
-      request.headers['Range'] =
-          'bytes=$rangeStart-${rangeEnd ?? ''}';
-    }
-
     try {
       final response = await _client.send(request).timeout(kConnectTimeout);
       return response;
@@ -278,49 +220,4 @@ class PlatformApi {
         return '接口返回异常状态码 $status。';
     }
   }
-}
-
-/// 从用户粘贴的教材页面链接中提取 `contentId` / `contentType`。
-///
-/// 对应参考实现 `api.py` 的 `parse()` 开头那段分支判断。返回 null 表示链接
-/// 不属于任何已知形态。
-ContentRef? parseContentRef(String rawUrl) {
-  final text = rawUrl.trim();
-  if (text.isEmpty) return null;
-
-  Uri uri;
-  try {
-    uri = Uri.parse(text.contains('://') ? text : 'https://$text');
-  } on FormatException {
-    return null;
-  }
-  if (uri.host.isEmpty) return null;
-
-  final params = uri.queryParameters;
-  String? contentId = params['contentId'];
-  String? contentType;
-
-  if (contentId != null) {
-    contentType = params['contentType'] ?? 'assets_document';
-  } else if (uri.path.contains('/syncClassroom/classActivity')) {
-    contentType = 'national_lesson';
-    contentId = params['activityId'];
-  } else if (uri.path.contains('/syncClassroom/prepare/detail')) {
-    contentType = 'prepare_sub_type';
-    contentId = params['resourceId'];
-  } else if (uri.path.contains('/syncClassroom/detail')) {
-    contentId = params['resourceId'];
-    contentType = params['resourceType'];
-  } else if (uri.path.contains('/qualityCourse')) {
-    contentType = 'quality_course';
-    contentId = params['courseId'];
-  } else {
-    return null;
-  }
-
-  if (contentId == null || contentId.isEmpty) return null;
-  return ContentRef(
-    contentId: contentId,
-    contentType: contentType ?? 'assets_document',
-  );
 }

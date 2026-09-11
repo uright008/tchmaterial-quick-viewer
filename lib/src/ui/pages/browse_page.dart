@@ -23,7 +23,11 @@ class BrowsePage extends StatefulWidget {
 
 class _BrowsePageState extends State<BrowsePage> {
   late final TextEditingController _searchController;
+  CatalogController? _catalog;
   bool _showSidebar = true;
+
+  /// 已经弹过提示的错误，避免同一条错误反复弹。
+  String? _reportedError;
 
   @override
   void initState() {
@@ -34,9 +38,50 @@ class _BrowsePageState extends State<BrowsePage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _catalog?.removeListener(_onCatalogChanged);
+    _catalog = context.read<CatalogController>()
+      ..addListener(_onCatalogChanged);
+  }
+
+  @override
   void dispose() {
+    _catalog?.removeListener(_onCatalogChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 目录状态变化的副作用：搜索框回灌 + 刷新失败提示。
+  void _onCatalogChanged() {
+    final catalog = _catalog;
+    if (catalog == null || !mounted) return;
+
+    // 选中分类会清空查询，但输入框只在自己 onChange 时才更新，于是会出现
+    // 「列表已经是分类结果、输入框里却还写着上次搜的词」。
+    if (_searchController.text != catalog.query) {
+      _searchController.value = TextEditingValue(
+        text: catalog.query,
+        selection: TextSelection.collapsed(offset: catalog.query.length),
+      );
+    }
+
+    // 已有数据时刷新失败，界面上没有任何反馈（错误分支只在无数据时显示）。
+    final error = catalog.error;
+    if (error != null && error != _reportedError) {
+      _reportedError = error;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('刷新失败：$error'),
+          action: SnackBarAction(
+            label: '重试',
+            onPressed: () => catalog.load(forceRefresh: true),
+          ),
+        ),
+      );
+    } else if (error == null) {
+      _reportedError = null;
+    }
   }
 
   @override
@@ -205,7 +250,12 @@ class _SortButton extends StatelessWidget {
     return PopupMenuButton<SortOrder>(
       tooltip: '排序方式',
       initialValue: catalog.sortOrder,
-      onSelected: catalog.setSortOrder,
+      // 两边都要写：只改 CatalogController 的话，设置页仍显示旧选项，
+      // 而且重启后偏好丢失。
+      onSelected: (order) {
+        context.read<SettingsController>().setSortOrder(order);
+        catalog.setSortOrder(order);
+      },
       itemBuilder: (context) => [
         for (final order in SortOrder.values)
           PopupMenuItem(

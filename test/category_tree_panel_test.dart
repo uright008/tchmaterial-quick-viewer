@@ -91,7 +91,69 @@ Widget host(CatalogIndex index) => MaterialApp(
       ),
     );
 
+/// 模拟真实启动时序：面板先用空索引构建，数据在之后才异步到达。
+///
+/// 这是实际发生过的缺陷：`initState` 里从**空的** `root.children` 去填「已收起」
+/// 集合，等于什么都没收起；数据到达后走 `didUpdateWidget`，而它只做 remove，
+/// 于是收起集合永远为空 —— 用户打开就是一棵递归铺满 1558 行的树。
+/// 只用「同步构造好的索引」写用例是抓不到这个的。
+Future<void> pumpWithAsyncIndex(WidgetTester tester) async {
+  // 默认测试画布只有 800x600，ListView.builder 不会构建屏幕外的行，
+  // 展开后靠后的节点就 find 不到。放大画布让整棵树都在视口内。
+  tester.view.physicalSize = const Size(1200, 2400);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+
+  var index = CatalogIndex.empty;
+  await tester.pumpWidget(MaterialApp(
+    home: Scaffold(
+      body: SizedBox(
+        width: 400,
+        height: 900,
+        child: StatefulBuilder(
+          builder: (context, setState) => Column(children: [
+            ElevatedButton(
+              onPressed: () => setState(() => index = buildIndex()),
+              child: const Text('载入数据'),
+            ),
+            Expanded(
+              child: CategoryTreePanel(
+                index: index,
+                selected: null,
+                onSelect: (_) {},
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ),
+  ));
+  await tester.tap(find.text('载入数据'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
+  testWidgets('数据异步到达后仍只显示第一级（不递归全展开）', (tester) async {
+    await pumpWithAsyncIndex(tester);
+
+    expect(find.text('电子教材'), findsOneWidget);
+    // 深层节点必须仍然是隐藏的。
+    expect(find.text('小学'), findsNothing);
+    expect(find.text('一年级'), findsNothing);
+    expect(find.text('上册'), findsNothing);
+    // 可见行数应当很少（全部教材 + 电子教材）。
+    expect(find.byType(ListTile).evaluate().length, lessThan(5),
+        reason: '异步灌入索引后不该把整棵树铺开');
+  });
+
+  testWidgets('异步到达后仍能正常逐级展开', (tester) async {
+    await pumpWithAsyncIndex(tester);
+
+    await expandAllVisible(tester);
+    expect(find.text('一年级'), findsNWidgets(2));
+    expect(find.text('上册'), findsNWidgets(2));
+  });
+
   testWidgets('默认可视层级只到顶层，不递归展开', (tester) async {
     await tester.pumpWidget(host(buildIndex()));
 
