@@ -29,35 +29,56 @@
 | 🔑 **凭据管理** | 支持直接粘贴浏览器 Cookie（自动解出 `access_token` / `mac_key` / `diff`）或纯 JSON |
 | 🌗 **明暗主题** | Material 3，跟随系统 / 手动切换 |
 
-## 🚀 构建
+## 🚀 平台支持与构建
+
+| 平台 | 状态 | 产物 |
+|---|---|---|
+| **Linux** x64 | ✅ 已验证 | `tchmaterial-quick-viewer-linux-x64.tar.gz` |
+| **Windows** x64 | ✅ CI 构建 | `tchmaterial-quick-viewer-windows-x64.zip` |
+| **macOS** | ✅ CI 构建 | `tchmaterial-quick-viewer-macos.zip` |
+| **Android** | ✅ 已验证 | `app-arm64-v8a-release.apk` 等（按 ABI 拆分） |
+| **iOS** | ⚠️ CI 出未签名包 | `tchmaterial-quick-viewer-ios-unsigned.zip`（需自行侧载） |
+| **Web** | ❌ 不支持 | —— |
+
+推送 `main` 或提 PR 会触发 [`.github/workflows/build.yml`](.github/workflows/build.yml)
+构建全平台产物；打 `v*` tag 会走
+[`.github/workflows/release.yml`](.github/workflows/release.yml) 自动发布 Release 并附上所有产物。
+
+### 为什么 Web 不支持
+
+`path_provider` **没有 web 实现**（依赖里只有 android / foundation / linux / windows），
+而本应用靠它拿到应用目录来缓存教材。所以 `flutter build web` 能编译通过，但一打开
+`main()` 里的存储初始化就抛异常 —— 属于「能构建、跑不起来」的假产物，因此没有纳入 CI。
+
+`main()` 里加了兜底：存储初始化失败时会渲染一个说明页面（而不是留一片白屏），
+所以真有人自己 build web，看到的也是「Web 平台不受支持，请改用桌面端或 Android」
+而不是空白页。要真正支持 Web，得把本地存储换成 IndexedDB、并把 PDF 阅读改为
+浏览器原生的 blob 方案，工作量不小。
+
+### 本地构建
 
 ```bash
 flutter pub get
 
-# Linux 桌面
+# Linux 桌面（需要 GTK 开发库）
+sudo apt-get install -y clang cmake ninja-build pkg-config \
+  libgtk-3-dev liblzma-dev libstdc++-12-dev
 flutter build linux --release
 ./build/linux/x64/release/bundle/tchmaterial_quick_viewer
 
 # Android（按 ABI 拆分，体积小很多）
 flutter build apk --release --split-per-abi
+
+# Windows / macOS / iOS
+flutter build windows --release
+flutter build macos   --release
+flutter build ios     --release --no-codesign   # 未签名，需自行侧载
 ```
 
-Android 构建需要 JDK 17–21。**JDK 26 会构建失败**：AGP 的 `JdkImageTransform`
-调用 `jlink` 会报 `Could not resolve all files for configuration ':jni:androidJdkImage'`
-（Flutter 自己的提示会误导你去升级 AGP，其实与 AGP 版本无关）。换 JDK 21 即可：
-
-```bash
-export JAVA_HOME=/usr/lib/jvm/zulu-21
-flutter build apk --release --split-per-abi
-```
-
-产物（已实测构建通过）：
-
-| APK | 体积 |
-|---|---|
-| `app-armeabi-v7a-release.apk` | 21.4 MB |
-| `app-arm64-v8a-release.apk` | 26.1 MB |
-| `app-x86_64-release.apk` | 27.8 MB |
+> **Android 构建必须用 JDK 17–21。** JDK 22+ 会让 AGP 9.x 的 `JdkImageTransform`
+> 调用 `jlink` 失败，报 `Could not resolve all files for configuration
+> ':jni:androidJdkImage'` —— Flutter 自己的提示会误导你去升级 AGP，其实与 AGP
+> 版本无关。CI 里已固定 `java-version: '21'`。
 
 ## 🧪 测试
 

@@ -1,0 +1,155 @@
+name: Build
+
+# 为每个受支持的平台产出可直接下载的构建产物。
+#
+# 关于 Web：**刻意不纳入**。本应用用 dart:io 与 path_provider 做本地教材缓存，
+# 而 path_provider 没有 web 实现，main() 里的存储初始化必然抛异常 —— 能编译，
+# 但一打开就是白屏。与其发布一个跑不起来的产物，不如先不构建（main() 里已经
+# 加了兜底界面，真的自己 build web 也会看到明确提示而不是白屏）。
+#
+# iOS 产物是**未签名**的 .app：没有发布证书，只能自行侧载（AltStore / Sideloadly
+# 等）。要发布到 App Store 需要自己配置签名证书并补上打包步骤。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: 静态分析与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-pub
+      # real_catalog_test 依赖本机目录缓存，取不到时会自行 skip，CI 上不会失败。
+      - run: flutter test
+
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          # AGP 9.x 的 JdkImageTransform 会调用 jlink；JDK 22+ 上这一步会失败，
+          # 所以这里必须用 17–21（本地在 26 上踩过同样的坑）。
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x64)
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 GTK 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: 打包
+        run: |
+          cd build/linux/x64/release/bundle
+          tar czf "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: tchmaterial-quick-viewer-linux-x64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: 打包
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* `
+            -DestinationPath tchmaterial-quick-viewer-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: tchmaterial-quick-viewer-windows-x64.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - name: 打包
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -qry "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-macos.zip" *.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: tchmaterial-quick-viewer-macos.zip
+          if-no-files-found: error
+
+  ios:
+    name: iOS (未签名)
+    runs-on: macos-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      # 没有证书，只能出未签名的 .app，需要自行侧载。
+      - run: flutter build ios --release --no-codesign
+      - name: 打包
+        run: |
+          cd build/ios/iphoneos
+          zip -qry "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-ios-unsigned.zip" Runner.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned
+          path: tchmaterial-quick-viewer-ios-unsigned.zip
+          if-no-files-found: error

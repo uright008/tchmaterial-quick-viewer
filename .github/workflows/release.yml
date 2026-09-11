@@ -1,0 +1,156 @@
+name: Release
+
+# 打 tag（如 v1.0.0）时构建全平台产物并挂到 GitHub Release。
+# 手动触发时只产出构建产物，不建 Release。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          # 见 build.yml 的说明：JDK 22+ 会让 AGP 的 JdkImageTransform 失败。
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 GTK 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: 打包
+        run: |
+          cd build/linux/x64/release/bundle
+          tar czf "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: tchmaterial-quick-viewer-linux-x64.tar.gz
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* `
+            -DestinationPath tchmaterial-quick-viewer-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: tchmaterial-quick-viewer-windows-x64.zip
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - run: |
+          cd build/macos/Build/Products/Release
+          zip -qry "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-macos.zip" *.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: tchmaterial-quick-viewer-macos.zip
+
+  ios:
+    name: iOS (未签名)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign
+      - run: |
+          cd build/ios/iphoneos
+          zip -qry "$GITHUB_WORKSPACE/tchmaterial-quick-viewer-ios-unsigned.zip" Runner.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned
+          path: tchmaterial-quick-viewer-ios-unsigned.zip
+
+  publish:
+    name: 发布 Release
+    runs-on: ubuntu-latest
+    needs: [android, linux, windows, macos, ios]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: 整理产物
+        run: |
+          find dist -type f | sort
+          mkdir -p release
+          find dist -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.tar.gz' \) \
+            -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            > [!WARNING]
+            > **This project is 100% written by AI, use at your own risk**
+
+            构建产物：
+
+            | 平台 | 文件 |
+            |---|---|
+            | Android | `app-arm64-v8a-release.apk` / `app-armeabi-v7a-release.apk` / `app-x86_64-release.apk` |
+            | Windows | `tchmaterial-quick-viewer-windows-x64.zip` |
+            | macOS | `tchmaterial-quick-viewer-macos.zip` |
+            | Linux | `tchmaterial-quick-viewer-linux-x64.tar.gz` |
+            | iOS | `tchmaterial-quick-viewer-ios-unsigned.zip`（未签名，需自行侧载） |
+
+            桌面端产物均未签名/未公证，首次运行可能需要在系统设置里手动放行。
+            Web 平台不受支持，原因见 README。
