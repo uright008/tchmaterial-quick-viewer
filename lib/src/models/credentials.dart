@@ -195,18 +195,19 @@ Map<String, dynamic>? _tryDecodeBase64Json(String text) {
   return null;
 }
 
-/// Base64URL → 标准 Base64，并补齐 `=` 填充。
+/// Base64URL → 标准 Base64，并按需补齐 `=` 填充。
+///
+/// 只处理 `% 4 == 2/3` 这两种「少一个 / 两个填充符」的情况。`% 4 == 1` 在
+/// Base64 里本就不可能出现 —— 早期实现会砍掉最后一个字符「凑合法」，等于把非法
+/// 输入悄悄变成一段能解码但内容错误的字节。这里不再修补，让它照常解码失败并由
+/// 上层回退（调用方都是 try/catch + 兜底分支）。
 String base64UrlToBase64(String input) {
-  var s = input.replaceAll('-', '+').replaceAll('_', '/').trim();
-  final remainder = s.length % 4;
-  if (remainder == 2) {
-    s = '$s==';
-  } else if (remainder == 3) {
-    s = '$s=';
-  } else if (remainder == 1) {
-    s = s.substring(0, s.length - 1);
-  }
-  return s;
+  final s = input.replaceAll('-', '+').replaceAll('_', '/').trim();
+  return switch (s.length % 4) {
+    2 => '$s==',
+    3 => '$s=',
+    _ => s,
+  };
 }
 
 String _stripWrappingQuotes(String text) {

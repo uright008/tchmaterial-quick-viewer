@@ -389,7 +389,7 @@ class _FileRow extends StatelessWidget {
 
   final ResourceFile file;
   final bool isPrimary;
-  final dynamic task;
+  final DownloadTask? task;
   final VoidCallback? onRead;
   final Future<void> Function() onDownload;
   final Future<void> Function()? onOpenExternal;
@@ -397,8 +397,13 @@ class _FileRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isRunning = task != null && task.isActive;
-    final isDone = task != null && task.status == DownloadStatus.done;
+    // 先落到局部变量再判空：Dart 不会为公开字段做类型提升，直接写
+    // `task != null && task.isActive` 是编译不过的（这正是原来用 `dynamic`
+    // 绕过静态检查时掩盖掉的问题）。
+    final currentTask = task;
+    final isRunning = currentTask != null && currentTask.isActive;
+    final isDone = currentTask?.status == DownloadStatus.done;
+    final hasFailed = currentTask?.status == DownloadStatus.failed;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -438,20 +443,20 @@ class _FileRow extends StatelessWidget {
                 ),
             ],
           ),
-          if (isRunning || (task != null && task.status == DownloadStatus.failed)) ...[
+          if (isRunning || hasFailed) ...[
             const SizedBox(height: 12),
             if (isRunning) ...[
-              LinearProgressIndicator(value: task.progress),
+              LinearProgressIndicator(value: currentTask.progress),
               const SizedBox(height: 6),
               Text(
-                task.progressLabel,
+                currentTask.progressLabel,
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             ] else
               Text(
-                task.error ?? '下载失败',
+                currentTask?.error ?? '下载失败',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.error,
                 ),

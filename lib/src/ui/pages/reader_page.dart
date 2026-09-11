@@ -52,6 +52,21 @@ class _ReaderPageState extends State<ReaderPage> {
   int _currentPage = 1;
   int _pageCount = 0;
 
+  /// 目录状态版本号。
+  ///
+  /// 窄屏时目录是 `showModalBottomSheet` 打开的 —— 那是一条独立路由，builder
+  /// 只在打开时跑一次，父页面后续的 setState 不会重建它。如果打开时章节还在
+  /// 加载，弹层就会永远停在转圈上。用一个 ValueNotifier 让弹层能跟着刷新。
+  final ValueNotifier<int> _outlineRevision = ValueNotifier<int>(0);
+
+  void _bumpOutline() => _outlineRevision.value++;
+
+  @override
+  void dispose() {
+    _outlineRevision.dispose();
+    super.dispose();
+  }
+
   /// 目录数据源：优先用平台目录，没有再退回 PDF 自带书签。
   List<Chapter> get _outlineChapters {
     final platform = _detail?.chapters ?? const <Chapter>[];
@@ -99,6 +114,7 @@ class _ReaderPageState extends State<ReaderPage> {
   Future<void> _loadOutline(LibraryController library) async {
     if (_detail != null && _detail!.hasChapters) return;
     setState(() => _outlineLoading = true);
+    _bumpOutline();
     try {
       final detail = await library.resolveDetail(widget.textbook);
       if (!mounted) return;
@@ -106,10 +122,12 @@ class _ReaderPageState extends State<ReaderPage> {
         _detail = detail;
         _outlineLoading = false;
       });
+      _bumpOutline();
     } catch (_) {
       // 目录取不到不影响阅读。
       if (!mounted) return;
       setState(() => _outlineLoading = false);
+      _bumpOutline();
     }
   }
 
@@ -182,21 +200,26 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 窄屏：把目录放进底部弹层，保证任何宽度下都能打开。
   Future<void> _openOutlineSheet(BuildContext context) async {
+    final sheetHeight = MediaQuery.sizeOf(context).height * 0.75;
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
+      // 弹层是独立路由，必须自己订阅目录状态，否则打开后就再也不更新。
       builder: (_) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.75,
-        child: OutlinePanel(
-          chapters: _outlineChapters,
-          loading: _outlineLoading,
-          usingPdfOutline: _usingPdfOutline,
-          currentPage: _currentPage,
-          onJump: (page) {
-            _controller.goToPage(pageNumber: page);
-            Navigator.of(context).maybePop();
-          },
+        height: sheetHeight,
+        child: ValueListenableBuilder<int>(
+          valueListenable: _outlineRevision,
+          builder: (context, _, _) => OutlinePanel(
+            chapters: _outlineChapters,
+            loading: _outlineLoading,
+            usingPdfOutline: _usingPdfOutline,
+            currentPage: _currentPage,
+            onJump: (page) {
+              _controller.goToPage(pageNumber: page);
+              Navigator.of(context).maybePop();
+            },
+          ),
         ),
       ),
     );
@@ -371,6 +394,7 @@ class _ReaderPageState extends State<ReaderPage> {
         _pdfOutline = nodes.map(_toChapter).toList();
         _usingPdfOutline = _pdfOutline.isNotEmpty;
       });
+      _bumpOutline();
     } catch (_) {
       // 书签不是必需品，解析失败就当没有。
     }
