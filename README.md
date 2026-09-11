@@ -1,5 +1,15 @@
 # 教材查看器 · tchmaterial-quick-viewer
 
+> [!WARNING]
+> **This project is 100% written by AI, use at your own risk**
+>
+> 本项目（含全部源码、注释、测试与文档）完全由 AI 生成，未经人工逐行审阅。请自行
+> 评估后再使用，尤其注意：
+> - 登录凭据（Cookie / `access_token` / `mac_key`）由你自行提供，请先确认代码如何
+>   处理它们；
+> - 自动下载可能与平台服务条款冲突，后果自负；
+> - 不提供任何形式的担保，详见 [LICENSE](LICENSE)。
+
 国家中小学智慧教育平台（[basic.smartedu.cn](https://basic.smartedu.cn/)）**电子课本浏览器**，Flutter 编写，桌面端与移动端通用。
 
 数据接口与 `X-ND-AUTH` 签名规则参考开源项目 [happycola233/tchMaterial-parser](https://github.com/happycola233/tchMaterial-parser)，本仓库是其 Flutter 重写 + 图形化浏览实现。
