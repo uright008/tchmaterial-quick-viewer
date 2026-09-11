@@ -4,6 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -106,6 +107,17 @@ class CacheStore {
     final store = CacheStore._(root, books, legacy);
     await store._migrateLegacyDownloads();
     return store;
+  }
+
+  /// 仅供测试：用指定目录构造，绕过 `path_provider`。
+  ///
+  /// 控制器层要能被测到就必须能造出 repository，而 `open()` 依赖平台插件。
+  @visibleForTesting
+  static CacheStore inDirectory(Directory dir) {
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final books = Directory('${dir.path}/books');
+    if (!books.existsSync()) books.createSync(recursive: true);
+    return CacheStore._(dir, books, null);
   }
 
   /// 把老版本留在应用私有目录里的教材搬到新位置，避免用户以为要重下。

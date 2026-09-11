@@ -21,7 +21,7 @@ class SettingsController extends ChangeNotifier {
   /// 释放后不再发通知：写偏好是异步的，窗口关闭时可能还在飞。
   void _safeNotify() {
     if (_disposed) return;
-    _safeNotify();
+    notifyListeners();
   }
 
   @override

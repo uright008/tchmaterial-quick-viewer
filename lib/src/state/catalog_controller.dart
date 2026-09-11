@@ -24,7 +24,7 @@ class CatalogController extends ChangeNotifier {
   /// 再 notifyListeners() 会在 debug 下直接断言失败。
   void _safeNotify() {
     if (_disposed) return;
-    _safeNotify();
+    notifyListeners();
   }
 
   @override

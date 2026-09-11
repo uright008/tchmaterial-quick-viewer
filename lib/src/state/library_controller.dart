@@ -70,7 +70,7 @@ class LibraryController extends ChangeNotifier {
   /// 释放后不再发通知（见 CatalogController 里同样的说明）。
   void _safeNotify() {
     if (_disposed) return;
-    _safeNotify();
+    notifyListeners();
   }
 
   @override
