@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
-import '../../core/platform_support.dart';
+import '../../core/file_actions.dart';
 import '../../models/credentials.dart';
 import '../../state/catalog_controller.dart';
 import '../../state/library_controller.dart';
@@ -141,8 +141,7 @@ class SettingsPage extends StatelessWidget {
                   leading: Icon(Icons.auto_stories_outlined),
                   title: Text('使用内置阅读器'),
                   subtitle: Text(
-                    '移动端直接使用内置 PDF 阅读器：系统不允许把 file:// '
-                    '路径交给第三方应用，需要额外的 FileProvider 配置。',
+                    '当前平台不支持把文件交给系统默认程序，将始终使用内置阅读器。',
                   ),
                 ),
             ],

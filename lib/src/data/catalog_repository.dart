@@ -383,10 +383,12 @@ class CatalogRepository {
 
     var chapters = const <Chapter>[];
     var fromTree = false;
+    var frontPage = 0;
     if (withChapters && primary.isPdf) {
       final parsed = await _parseChapters(data);
       chapters = parsed.chapters;
       fromTree = parsed.fromTree;
+      frontPage = parsed.frontPage;
     }
 
     return TextbookDetail(
@@ -395,6 +397,7 @@ class CatalogRepository {
       files: files,
       chapters: chapters,
       chaptersFromTree: fromTree,
+      frontPage: frontPage,
     );
   }
 
@@ -524,10 +527,9 @@ class CatalogRepository {
   ///
   /// mapping 给「node_id → 页码」，tree 给「node_id → 标题与层级」，
   /// 两者 id 对齐后才能得到可跳转的目录。
-  Future<({List<Chapter> chapters, bool fromTree})> _parseChapters(
-    Map<String, dynamic> data,
-  ) async {
-    const empty = (chapters: <Chapter>[], fromTree: false);
+  Future<({List<Chapter> chapters, bool fromTree, int frontPage})>
+      _parseChapters(Map<String, dynamic> data) async {
+    const empty = (chapters: <Chapter>[], fromTree: false, frontPage: 0);
     try {
       final items = data['ti_items'];
       if (items is! List) return empty;
@@ -547,6 +549,9 @@ class CatalogRepository {
       if (mappingJson is! Map) return empty;
 
       final ebookId = mappingJson['ebook_id'];
+      // 前置页数：印刷页码 + frontPage = PDF 页码。
+      // 目录展示要用它换算出「书上印的页码」，否则用户对着书看会觉得页码不对。
+      final frontPage = (mappingJson['front_page'] as num?)?.toInt() ?? 0;
       final pageOfNode = <String, int>{};
       final mappings = mappingJson['mappings'];
       if (mappings is List) {
@@ -569,7 +574,7 @@ class CatalogRepository {
         if (nodes is List && nodes.isNotEmpty) {
           final chapters = _buildChapters(nodes, pageOfNode);
           if (chapters.isNotEmpty) {
-            return (chapters: chapters, fromTree: true);
+            return (chapters: chapters, fromTree: true, frontPage: frontPage);
           }
         }
       }
@@ -583,6 +588,7 @@ class CatalogRepository {
             Chapter(title: '第 ${i + 1} 节 (P${pages[i]})', pageIndex: pages[i]),
         ],
         fromTree: false,
+        frontPage: frontPage,
       );
     } catch (_) {
       // 目录只是锦上添花，失败时静默降级。

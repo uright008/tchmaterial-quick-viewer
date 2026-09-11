@@ -24,8 +24,9 @@
 | 📚 **全库浏览** | 一次拉取全部 **3,574 本**教材（4 个分片，约 40 MB），磁盘缓存 + 平台版本号失效判断 |
 | 🔍 **多词检索** | 书名 / 学科 / 版本 / 年级跨字段 AND 搜索 |
 | 🖼️ **封面墙** | 从 `custom_properties.preview` 取首页缩略图作封面（92% 的教材有封面） |
-| 📖 **内置阅读器** | 基于 pdfrx/pdfium 的 PDF 阅读，带**可逐级展开的目录**（合并 `ebook_mapping` 页码与章节树，缺失时回退到 PDF 自带书签），**默认只展开第一级** |
-| ⬇️ **下载与离线** | 流式下载、进度显示、中断不留残文件（先写 `.part` 再改名）；教材直接存到 **`下载/tchMaterial/`**，文件管理器里能直接找到、也能交给第三方 PDF 阅读器 |
+| 📖 **内置阅读器** | 基于 pdfrx/pdfium 的 PDF 阅读，带**可逐级展开的目录**（合并 `ebook_mapping` 页码与章节树，缺失时回退到 PDF 自带书签），**默认只展开第一级**；目录显示**书上印刷的页码** |
+| ⬇️ **下载与离线** | 流式下载、进度显示、中断不留残文件（先写 `.part` 再改名）；教材直接存到 **`下载/tchMaterial/`**，文件管理器里能直接找到 |
+| 📤 **外部打开与分享** | 详情页 / 阅读器 / 书架都能「用系统程序打开」和「分享」。Android 走自建 FileProvider + `ACTION_VIEW`（**不引入多余权限**），桌面端走 `url_launcher`，分享走 `share_plus` |
 | 🔑 **凭据管理** | 支持直接粘贴浏览器 Cookie（自动解出 `access_token` / `mac_key` / `diff`）或纯 JSON |
 | 🌗 **明暗主题** | Material 3，跟随系统 / 手动切换 |
 
@@ -83,7 +84,7 @@ flutter build ios     --release --no-codesign   # 未签名，需自行侧载
 ## 🧪 测试
 
 ```bash
-flutter test     # 96 个用例
+flutter test     # 112 个用例
 ```
 
 分七组：
@@ -98,6 +99,7 @@ flutter test     # 96 个用例
   `TCHVIEWER_CATALOG` 指定缓存路径）
 - `outline_panel_test.dart` —— 目录面板：默认只展开第一级、逐级展开/收起、无「全部展开」入口
 - `category_tree_panel_test.dart` —— 分类树：默认不递归展开、共享 `tag_id` 的两个节点能独立收起
+- `controller_test.dart` —— 三个控制器的通知路径与 dispose 守卫
 - `widget_test.dart` —— 分类树面板与书卡渲染
 
 ## 🏗️ 结构
@@ -137,6 +139,18 @@ mac   = Base64(HMAC-SHA256(mac_key, 原文))
   id，否则兄弟分支会互相污染 —— 表现为「统编版 104 本」下面挂着「一年级 150 本」。
   代码里用 `CategoryNode.uniqueKey` 处理，并有用例守着 —— 索引层和 UI 层
   （分类树的收起状态）都踩过这个坑。
+- **目录页码要用 `front_page` 换算，不能直接显示 PDF 页号。** 平台的
+  `ebook_mapping` 顶层有个 `front_page` 字段（前置页数：封面、目录等），
+  `page_number = 印刷页码 + front_page`。实测某教材 `front_page=5`：目录页印着
+  「第一单元 / 1」，映射给的却是 `6`，差值恒为 5。直接显示 `P6` 会让用户对着书
+  核对时认为导航不准 —— 跳转本身是准的，不准的是那个数字。
+  另外已确认 `page_number` 是 **1-based 绝对 PDF 页索引**（和
+  `PdfViewerController.goToPage` 的语义一致），不存在差一页的问题。
+- **这些教材 PDF 没有自带书签。** 两份样本的 `/Outlines`、`/Dest` 全为 0，所以
+  「回退到 PDF 书签」这条路径对平台教材基本不会触发。代码里仍然实现了它，并且
+  会用 `PdfDest` 的 `command`/`params` 还原**页内纵向偏移**（`xyz` 是
+  `[left, top, zoom]`，`fitH`/`fitBH` 是 `[top]`），交给 pdfrx 的 `goToDest`
+  按 PDF 规范换算 —— 只取页码会把本该落在标题处的跳转丢到页顶。
 - **18% 的教材没有分类信息。** 654 本「课程教学指南」类资源的 `tag_list` 是空数组，
   会归入「未分类」而不是被丢弃。
 - **约 19% 的教材平台未开放直链。** 随机抽样 160 本：`81.2%` 可正常解析并下载，

@@ -1,13 +1,14 @@
 /// 教材详情页：封面、分类信息、文件列表与章节目录。
 library;
 
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
-import '../../core/platform_support.dart';
+import '../../core/file_actions.dart';
 import '../../models/category.dart';
 import '../../models/textbook.dart';
 import '../../state/library_controller.dart';
@@ -105,6 +106,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                     onRead: _openReader,
                     onDownload: _download,
                     onOpenExternal: _openExternally,
+                    onShare: _share,
                   ),
                   const SizedBox(height: 20),
                   _ChaptersSection(
@@ -198,17 +200,37 @@ class _BookDetailPageState extends State<BookDetailPage> {
     }
   }
 
-  Future<void> _openExternally(ResourceFile file) async {
+  /// 确保文件已在本地，然后交给外部程序处理。
+  ///
+  /// Android 上不能直接用 `file://`（API 24+ 会抛 FileUriExposedException），
+  /// 换 URI、授权、发 Intent 都在原生侧完成，见 `core/file_actions.dart`。
+  Future<void> _withLocalFile(
+    ResourceFile file,
+    Future<FileActionResult> Function(File local) action,
+  ) async {
     final library = context.read<LibraryController>();
     try {
       final local = await library.ensureLocal(widget.textbook, file);
-      await launchUrl(Uri.file(local.path),
-          mode: LaunchMode.externalApplication);
+      if (!mounted) return;
+      final result = await action(local);
+      if (!mounted || result == FileActionResult.ok) return;
+      _toast(result.message);
     } catch (error) {
       if (!mounted) return;
       _toast('$error');
     }
   }
+
+  Future<void> _openExternally(ResourceFile file) =>
+      _withLocalFile(file, openFileExternally);
+
+  Future<void> _share(ResourceFile file) => _withLocalFile(
+        file,
+        (local) => shareFile(
+          local,
+          subject: widget.textbook.title,
+        ),
+      );
 }
 
 class _Header extends StatelessWidget {
@@ -326,6 +348,7 @@ class _FilesSection extends StatelessWidget {
     required this.onRead,
     required this.onDownload,
     required this.onOpenExternal,
+    required this.onShare,
   });
 
   final TextbookDetail detail;
@@ -333,6 +356,7 @@ class _FilesSection extends StatelessWidget {
   final void Function(ResourceFile file) onRead;
   final Future<void> Function(ResourceFile file) onDownload;
   final Future<void> Function(ResourceFile file) onOpenExternal;
+  final Future<void> Function(ResourceFile file) onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -357,6 +381,7 @@ class _FilesSection extends StatelessWidget {
                 onRead: () => onRead(primary),
                 onDownload: () => onDownload(primary),
                 onOpenExternal: () => onOpenExternal(primary),
+                onShare: () => onShare(primary),
               ),
             for (final file in detail.attachments)
               Padding(
@@ -368,6 +393,7 @@ class _FilesSection extends StatelessWidget {
                   onRead: null,
                   onDownload: () => onDownload(file),
                   onOpenExternal: () => onOpenExternal(file),
+                  onShare: () => onShare(file),
                 ),
               ),
           ],
@@ -385,6 +411,7 @@ class _FileRow extends StatelessWidget {
     required this.onRead,
     required this.onDownload,
     required this.onOpenExternal,
+    required this.onShare,
   });
 
   final ResourceFile file;
@@ -393,6 +420,7 @@ class _FileRow extends StatelessWidget {
   final VoidCallback? onRead;
   final Future<void> Function() onDownload;
   final Future<void> Function()? onOpenExternal;
+  final Future<void> Function()? onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -481,13 +509,19 @@ class _FileRow extends StatelessWidget {
                 ),
                 label: Text(isDone ? '重新下载' : '下载'),
               ),
-              // Android/iOS 上 file:// 会被系统拒绝，且内置阅读器已够用，
-              // 因此只在外层支持时才显示这个入口。详见 platform_support.dart。
+              // Android 走 FileProvider + ACTION_VIEW，桌面端走 url_launcher，
+              // 两者都收敛在 core/file_actions.dart 里。
               if (onOpenExternal != null && supportsExternalFileOpen)
                 TextButton.icon(
                   onPressed: onOpenExternal,
                   icon: const Icon(Icons.open_in_new, size: 16),
                   label: const Text('用系统程序打开'),
+                ),
+              if (onShare != null && supportsSharing)
+                TextButton.icon(
+                  onPressed: onShare,
+                  icon: const Icon(Icons.share_outlined, size: 16),
+                  label: const Text('分享'),
                 ),
             ],
           ),
@@ -602,7 +636,8 @@ class _ChaptersSection extends StatelessWidget {
                         ),
                       if (chapter.hasPage)
                         Text(
-                          'P${chapter.pageIndex}',
+                          // 用书上印刷的页码，与纸质书对照一致。
+                          'P${chapter.printedPage(detail.frontPage) ?? chapter.pageIndex}',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),

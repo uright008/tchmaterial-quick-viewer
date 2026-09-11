@@ -33,6 +33,29 @@ const _chapters = [
 Widget host(Widget child) => MaterialApp(home: Scaffold(body: child));
 
 void main() {
+  group('印刷页码换算（front_page）', () {
+    // 实测数据：某教材 front_page=5，目录写「第一单元 / 1」，平台映射给 6。
+    test('印刷页码 = PDF 页码 - front_page', () {
+      const ch = Chapter(title: '第一单元', pageIndex: 6);
+      expect(ch.printedPage(5), 1);
+      expect(const Chapter(title: '第16课', pageIndex: 63).printedPage(5), 58);
+    });
+
+    test('前置页本身没有印刷页码', () {
+      // PDF 第 1..5 页是封面/目录，印刷页码不存在。
+      expect(const Chapter(title: '封面', pageIndex: 1).printedPage(5), isNull);
+      expect(const Chapter(title: '目录', pageIndex: 5).printedPage(5), isNull);
+    });
+
+    test('front_page 未知时返回 null，调用方回退到 PDF 页码', () {
+      expect(const Chapter(title: 'x', pageIndex: 10).printedPage(0), isNull);
+    });
+
+    test('没有页码的节点返回 null', () {
+      expect(const Chapter(title: 'x').printedPage(5), isNull);
+    });
+  });
+
   group('OutlinePanel', () {
     testWidgets('顶层章节默认可见，子节点默认收起', (tester) async {
       await tester.pumpWidget(host(
@@ -168,14 +191,14 @@ void main() {
       expect(find.text('全部展开'), findsNothing);
     });
 
-    testWidgets('点标题会带着页码回调跳转', (tester) async {
+    testWidgets('点标题会把对应章节回调出去', (tester) async {
       final jumped = <int>[];
       await tester.pumpWidget(host(
         OutlinePanel(
           chapters: _chapters,
           loading: false,
           currentPage: 1,
-          onJump: jumped.add,
+          onJump: (chapter) => jumped.add(chapter.pageIndex!),
         ),
       ));
 
@@ -200,6 +223,34 @@ void main() {
         ),
       ));
       expect(find.textContaining('没有目录'), findsOneWidget);
+    });
+
+    testWidgets('有 front_page 时行尾显示书上印刷的页码', (tester) async {
+      await tester.pumpWidget(host(
+        OutlinePanel(
+          chapters: _chapters,
+          loading: false,
+          frontPage: 5,
+          currentPage: 1,
+          onJump: (_) {},
+        ),
+      ));
+      // _chapters 里第一单元 pageIndex=6 → 印刷页码 1
+      expect(find.text('P1'), findsOneWidget);
+      expect(find.text('P6'), findsNothing, reason: '不该显示绝对 PDF 页号');
+      expect(find.text('印刷页码'), findsOneWidget);
+    });
+
+    testWidgets('没有 front_page 时回退到 PDF 页码', (tester) async {
+      await tester.pumpWidget(host(
+        OutlinePanel(
+          chapters: _chapters,
+          loading: false,
+          currentPage: 1,
+          onJump: (_) {},
+        ),
+      ));
+      expect(find.text('P6'), findsOneWidget);
     });
 
     testWidgets('数据源会标注是平台目录还是 PDF 书签', (tester) async {

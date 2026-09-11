@@ -6,9 +6,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
-
-import '../../core/platform_support.dart';
+import '../../core/file_actions.dart';
 import '../../models/textbook.dart';
 import '../../state/library_controller.dart';
 
@@ -190,6 +188,8 @@ class _ReaderPageState extends State<ReaderPage> {
                   value: 'external',
                   child: Text('用系统程序打开'),
                 ),
+              if (supportsSharing)
+                const PopupMenuItem(value: 'share', child: Text('分享这本教材')),
             ],
           ),
         ],
@@ -214,9 +214,10 @@ class _ReaderPageState extends State<ReaderPage> {
             chapters: _outlineChapters,
             loading: _outlineLoading,
             usingPdfOutline: _usingPdfOutline,
+            frontPage: _detail?.frontPage ?? 0,
             currentPage: _currentPage,
-            onJump: (page) {
-              _controller.goToPage(pageNumber: page);
+            onJump: (chapter) {
+              _jumpTo(chapter);
               Navigator.of(context).maybePop();
             },
           ),
@@ -367,8 +368,9 @@ class _ReaderPageState extends State<ReaderPage> {
             chapters: chapters,
             loading: _outlineLoading,
             usingPdfOutline: _usingPdfOutline,
+            frontPage: _detail?.frontPage ?? 0,
             currentPage: _currentPage,
-            onJump: (page) => _controller.goToPage(pageNumber: page),
+            onJump: _jumpTo,
             onClose: () => setState(() => _showOutline = false),
           ),
         ),
@@ -400,11 +402,42 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  Chapter _toChapter(PdfOutlineNode node) => Chapter(
-        title: node.title,
-        pageIndex: node.dest?.pageNumber,
-        children: node.children.map(_toChapter).toList(),
+  Chapter _toChapter(PdfOutlineNode node) {
+    final dest = node.dest;
+    return Chapter(
+      title: node.title,
+      pageIndex: dest?.pageNumber,
+      // 连页内位置一起带上。PDF 的显式目标里 `xyz` 是 [left, top, zoom]，
+      // `fitH`/`fitBH` 是 [top] —— 只取页码就会丢掉这个纵向偏移，
+      // 本该落在标题处的跳转只能落到页顶。
+      destination: dest == null
+          ? null
+          : PdfDestination(
+              pageNumber: dest.pageNumber,
+              command: dest.command.name,
+              params: dest.params ?? const [],
+            ),
+      children: node.children.map(_toChapter).toList(),
+    );
+  }
+
+  /// 跳转到目录项。
+  ///
+  /// 有 PDF 自带书签（含页内偏移）就用 `goToDest`，让 pdfrx 按 PDF 规范换算；
+  /// 平台目录只给了页码，那就跳页顶。
+  Future<void> _jumpTo(Chapter chapter) async {
+    final dest = chapter.destination;
+    if (dest != null) {
+      final handled = await _controller.goToDest(
+        PdfDest(dest.pageNumber, PdfDestCommand.parse(dest.command), dest.params),
       );
+      if (handled) return;
+    }
+    final page = chapter.pageIndex;
+    if (page != null && page > 0) {
+      await _controller.goToPage(pageNumber: page);
+    }
+  }
 
   Future<void> _onViewAction(String action) async {
     switch (action) {
@@ -425,17 +458,15 @@ class _ReaderPageState extends State<ReaderPage> {
       case 'first':
         await _controller.goToPage(pageNumber: 1);
       case 'external':
+      case 'share':
         final file = _localFile;
         if (file == null) return;
-        if (!await launchUrl(
-          Uri.file(file.path),
-          mode: LaunchMode.externalApplication,
-        )) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('没有找到可打开 PDF 的程序')),
-          );
-        }
+        final result = action == 'share'
+            ? await shareFile(file, subject: widget.textbook.title)
+            : await openFileExternally(file);
+        if (!mounted || result == FileActionResult.ok) return;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(result.message)));
     }
   }
 
@@ -472,16 +503,20 @@ class OutlinePanel extends StatefulWidget {
     required this.onJump,
     this.onClose,
     this.usingPdfOutline = false,
+    this.frontPage = 0,
   });
 
   final List<Chapter> chapters;
   final bool loading;
   final int currentPage;
-  final ValueChanged<int> onJump;
+  final ValueChanged<Chapter> onJump;
   final VoidCallback? onClose;
 
   /// 目录来自 PDF 自带书签（而非平台接口）。
   final bool usingPdfOutline;
+
+  /// 平台给出的前置页数，用于把 PDF 页码换算成书上印刷的页码。
+  final int frontPage;
 
   @override
   State<OutlinePanel> createState() => _OutlinePanelState();
@@ -543,12 +578,23 @@ class _OutlinePanelState extends State<OutlinePanel> {
               Text('目录', style: theme.textTheme.titleSmall),
               const SizedBox(width: 8),
               Flexible(
-                child: Text(
-                  widget.usingPdfOutline ? 'PDF 内置书签' : '平台目录',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                child: Tooltip(
+                  // 面板只有 300px，长标签会被截断，完整说明放 tooltip。
+                  message: widget.usingPdfOutline
+                      ? '目录来自 PDF 自带书签（平台未提供章节目录）'
+                      : (widget.frontPage > 0
+                          ? '行尾显示的是**书上印刷的页码**（PDF 页码 = 印刷页码 + '
+                              '${widget.frontPage} 页前置页）'
+                          : '目录来自平台，行尾为 PDF 页码'),
+                  child: Text(
+                    widget.usingPdfOutline
+                        ? 'PDF 书签'
+                        : (widget.frontPage > 0 ? '印刷页码' : '平台目录'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ),
@@ -614,7 +660,7 @@ class _OutlinePanelState extends State<OutlinePanel> {
 
         return InkWell(
           // 点标题只跳页；展开/收起交给左侧箭头，避免想翻页却把树展开了。
-          onTap: chapter.hasPage ? () => widget.onJump(chapter.pageIndex!) : null,
+          onTap: chapter.hasPage ? () => widget.onJump(chapter) : null,
           child: Padding(
             padding: EdgeInsets.fromLTRB(6 + row.depth * 14.0, 2, 10, 2),
             child: Row(
@@ -660,7 +706,9 @@ class _OutlinePanelState extends State<OutlinePanel> {
                 ),
                 if (chapter.hasPage)
                   Text(
-                    'P${chapter.pageIndex}',
+                    // 有前置页信息时显示**书上印的页码** —— 用户是拿着书对照的，
+                    // 显示绝对 PDF 页号（比印刷页大 frontPage）会被认为「不准」。
+                    'P${chapter.printedPage(widget.frontPage) ?? chapter.pageIndex}',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: isCurrent
                           ? theme.colorScheme.primary

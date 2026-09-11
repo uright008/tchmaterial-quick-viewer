@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/platform_support.dart';
+import '../../core/file_actions.dart';
 import '../../state/library_controller.dart';
 
 class LibraryPage extends StatelessWidget {
@@ -271,17 +271,45 @@ class _OfflineFileCard extends StatelessWidget {
           '$size · ${modified.year}-${_pad(modified.month)}-${_pad(modified.day)}',
           style: theme.textTheme.labelSmall,
         ),
-        trailing: IconButton(
-          tooltip: '删除本地文件',
-          icon: const Icon(Icons.delete_outline),
-          onPressed: () =>
-              context.read<LibraryController>().deleteLocal(file),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (supportsExternalFileOpen)
+              IconButton(
+                tooltip: '用系统程序打开',
+                icon: const Icon(Icons.open_in_new),
+                onPressed: () => _run(context, openFileExternally(file)),
+              ),
+            if (supportsSharing)
+              IconButton(
+                tooltip: '分享',
+                icon: const Icon(Icons.share_outlined),
+                onPressed: () => _run(context, shareFile(file)),
+              ),
+            IconButton(
+              tooltip: '删除本地文件',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () =>
+                  context.read<LibraryController>().deleteLocal(file),
+            ),
+          ],
         ),
       ),
     );
   }
 
   static String _pad(int v) => v.toString().padLeft(2, '0');
+
+  /// 把结果统一反馈给用户：成功就闭嘴，失败说明原因。
+  static Future<void> _run(
+    BuildContext context,
+    Future<FileActionResult> action,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await action;
+    if (result == FileActionResult.ok) return;
+    messenger.showSnackBar(SnackBar(content: Text(result.message)));
+  }
 
   static String _formatBytes(int bytes) {
     const units = ['B', 'KB', 'MB', 'GB'];

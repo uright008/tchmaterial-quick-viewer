@@ -153,14 +153,48 @@ class ResourceFile {
   }
 }
 
+/// PDF 显式目标（PDF 32000-1:2008, 12.3.2.2）。
+///
+/// 这里只存原始数值，不直接引用 pdfrx 的 `PdfDest`，免得模型层依赖渲染库；
+/// 阅读器跳转时再还原成 `PdfDest` 交给 `goToDest`。
+///
+/// 为什么需要它：`PdfDest` 除了页码还带 `command` + `params`，其中就包含**页内
+/// 纵向位置**（`xyz` 是 `[left, top, zoom]`，`fitH`/`fitBH` 是 `[top]`）。
+/// 只取页码而丢掉 `top`，本来该落在标题处的跳转就只能落在页顶。
+class PdfDestination {
+  const PdfDestination({
+    required this.pageNumber,
+    required this.command,
+    this.params = const [],
+  });
+
+  /// 1 起的页码（pdfrx 已做 `pageIndex + 1`，与 `goToPage` 的语义一致）。
+  final int pageNumber;
+
+  /// `xyz` / `fit` / `fitH` / `fitV` / `fitR` / `fitB` / `fitBH` / `fitBV`
+  final String command;
+
+  /// 位置参数，坐标系是 PDF 用户空间（原点在左下角，Y 轴向上）。
+  final List<double?> params;
+}
+
 /// 章节目录节点（来自 `ebook_mapping` + `trees` 接口的合并结果）。
 class Chapter {
-  const Chapter({required this.title, this.pageIndex, this.children = const []});
+  const Chapter({
+    required this.title,
+    this.pageIndex,
+    this.destination,
+    this.children = const [],
+  });
 
   final String title;
 
-  /// 1 起的页码；为 null 表示平台未给出映射。
+  /// 1 起的 **PDF** 页码；为 null 表示平台未给出映射。
   final int? pageIndex;
+
+  /// PDF 自带书签里的精确目标位置（含页内偏移）。平台目录没有这个信息。
+  final PdfDestination? destination;
+
   final List<Chapter> children;
 
   bool get hasPage => pageIndex != null && pageIndex! > 0;
@@ -174,6 +208,18 @@ class Chapter {
                 .toList() ??
             const [],
       );
+
+  /// 换算成书上印刷的页码。
+  ///
+  /// 平台的 `page_number` 是**绝对 PDF 页索引**，而书上印的是正文页码，
+  /// 两者相差 `front_page`（前置页数，封面/目录等）。实测某本教材前置 5 页：
+  /// 目录里写「第一单元 / 1」，映射给的却是 6，差值恒为 `front_page`。
+  /// 展示时用印刷页码，用户才能和手里的书对上。
+  int? printedPage(int frontPage) {
+    final page = pageIndex;
+    if (page == null || frontPage <= 0 || page <= frontPage) return null;
+    return page - frontPage;
+  }
 
   Map<String, dynamic> toJson() => {
         'title': title,
@@ -197,6 +243,7 @@ class TextbookDetail {
     required this.files,
     this.chapters = const [],
     this.chaptersFromTree = false,
+    this.frontPage = 0,
   });
 
   final String textbookId;
@@ -208,6 +255,12 @@ class TextbookDetail {
 
   /// true = 带层级结构的真目录；false = 只有页码的兜底索引。
   final bool chaptersFromTree;
+
+  /// 教材前置页数（封面、目录等），来自平台 `ebook_mapping.front_page`。
+  ///
+  /// 「印刷页码 + frontPage = PDF 页码」。为 0 表示未知（例如目录来自 PDF
+  /// 自带书签时）。
+  final int frontPage;
 
   /// 正文文件（优先 PDF）。
   ResourceFile? get primaryFile {

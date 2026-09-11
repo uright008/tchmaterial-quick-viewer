@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只开放本应用自己的教材目录，不给 FileProvider 任何多余范围。
+
+  Android 从 API 24 起禁止把 file:// URI 交给其它应用（FileUriExposedException），
+  必须换成 FileProvider 提供的 content:// URI。
+
+  教材落盘位置来自 CacheStore：Android 上 getDownloadsDirectory() 不可用，
+  会退回 getApplicationSupportDirectory()，也就是 context.filesDir。
+  因此这里只需要 <files-path>，路径写成 tchmaterial_viewer 前缀进一步收窄。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- <filesDir>/tchmaterial_viewer/…（CacheStore 的根目录） -->
+    <files-path
+        name="tch_books"
+        path="tchmaterial_viewer/" />
+</paths>
