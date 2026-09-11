@@ -1,17 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  只开放本应用自己的教材目录，不给 FileProvider 任何多余范围。
+  「用系统程序打开」时，file:// 从 API 24 起不允许跨应用传递，必须换成
+  FileProvider 提供的 content:// URI。这里声明**允许被共享的根目录**，
+  路径不在列表里的文件，FileProvider.getUriForFile 会直接抛
+  IllegalArgumentException: Failed to find configured root。
 
-  Android 从 API 24 起禁止把 file:// URI 交给其它应用（FileUriExposedException），
-  必须换成 FileProvider 提供的 content:// URI。
+  ⚠️ 必须与 CacheStore 的实际落盘位置一一对应，否则就是「分享能用、打开失败」：
+  share_plus 会把文件复制进它自己的 cache 再分享，所以不受这里影响，
+  很容易掩盖配置错误。
 
-  教材落盘位置来自 CacheStore：Android 上 getDownloadsDirectory() 不可用，
-  会退回 getApplicationSupportDirectory()，也就是 context.filesDir。
-  因此这里只需要 <files-path>，路径写成 tchmaterial_viewer 前缀进一步收窄。
+  CacheStore.open() 的取路径逻辑：
+    1. getDownloadsDirectory() 非空 → <downloads>/tchMaterial
+    2. 否则回退内部支持目录        → <applicationSupport>/tchmaterial_viewer/books
+
+  Android 上两个分支都可能走到（见下方注释），所以**两种根都要声明**。
 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- <filesDir>/tchmaterial_viewer/…（CacheStore 的根目录） -->
+    <!--
+      分支 1：Android 的 getDownloadsPath() 实际上返回
+      getExternalFilesDirs(DIRECTORY_DOWNLOADS)，
+      即 /storage/emulated/0/Android/data/<pkg>/files/Download
+      （不是 null！设备无外部存储时才为 null）。
+      对应 <external-files-path> = context.getExternalFilesDir(null)。
+    -->
+    <external-files-path
+        name="tch_external_downloads"
+        path="Download/tchMaterial/" />
+
+    <!--
+      分支 2：无外部存储时回退到内部支持目录
+      （path_provider_android 的 getApplicationSupportPath = context.filesDir）。
+      对应 <files-path> = context.getFilesDir()。
+    -->
     <files-path
-        name="tch_books"
+        name="tch_internal_support"
         path="tchmaterial_viewer/" />
 </paths>

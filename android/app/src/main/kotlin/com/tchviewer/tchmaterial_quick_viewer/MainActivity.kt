@@ -39,6 +39,11 @@ class MainActivity : FlutterActivity() {
                         }
                         try {
                             result.success(openWith(path, mimeType))
+                        } catch (e: PathNotSharedException) {
+                            // 路径不在 tch_file_paths.xml 声明范围内。
+                            // 这是配置问题，必须和「设备上没有能打开它的应用」
+                            // 区分开 —— 否则只会看到一个笼统的失败，无从排查。
+                            result.error("path_not_shared", e.message, null)
                         } catch (e: Exception) {
                             result.error("open_failed", e.message, null)
                         }
@@ -47,6 +52,9 @@ class MainActivity : FlutterActivity() {
                 }
             }
     }
+
+    /** 路径不在 FileProvider 已声明的根目录里。 */
+    private class PathNotSharedException(message: String) : Exception(message)
 
     /** 返回 true 表示已经有应用接手；false 表示设备上没有能打开它的应用。 */
     private fun openWith(path: String, mimeType: String): Boolean {
@@ -57,11 +65,16 @@ class MainActivity : FlutterActivity() {
 
         // FLAG_GRANT_READ_URI_PERMISSION 是必须的：接收方默认无权读取本应用的
         // content:// URI，少了这个标志对方会直接报 SecurityException。
-        val uri: Uri = FileProvider.getUriForFile(
-            this,
-            "$packageName.tchfileprovider",
-            file,
-        )
+        val uri: Uri = try {
+            FileProvider.getUriForFile(this, "$packageName.tchfileprovider", file)
+        } catch (e: IllegalArgumentException) {
+            // 典型信息：Failed to find configured root that contains /...
+            // 说明 res/xml/tch_file_paths.xml 没覆盖这个目录 —— 上传前请对照
+            // CacheStore 的落盘位置。
+            throw PathNotSharedException(
+                "文件所在目录未在 FileProvider 中声明：${file.parent}（${e.message}）",
+            )
+        }
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mimeType)

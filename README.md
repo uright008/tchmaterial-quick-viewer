@@ -25,7 +25,7 @@
 | 🔍 **多词检索** | 书名 / 学科 / 版本 / 年级跨字段 AND 搜索 |
 | 🖼️ **封面墙** | 从 `custom_properties.preview` 取首页缩略图作封面（92% 的教材有封面） |
 | 📖 **内置阅读器** | 基于 pdfrx/pdfium 的 PDF 阅读，带**可逐级展开的目录**（合并 `ebook_mapping` 页码与章节树，缺失时回退到 PDF 自带书签），**默认只展开第一级**；目录显示**书上印刷的页码** |
-| ⬇️ **下载与离线** | 流式下载、进度显示、中断不留残文件（先写 `.part` 再改名）；教材直接存到 **`下载/tchMaterial/`**，文件管理器里能直接找到 |
+| ⬇️ **下载与离线** | 流式下载、进度显示、中断不留残文件（先写 `.part` 再改名）；教材存到系统的下载目录下（各平台落点见下表） |
 | 📤 **外部打开与分享** | 详情页 / 阅读器 / 书架都能「用系统程序打开」和「分享」。Android 走自建 FileProvider + `ACTION_VIEW`（**不引入多余权限**），桌面端走 `url_launcher`，分享走 `share_plus` |
 | 🔑 **凭据管理** | 支持直接粘贴浏览器 Cookie（自动解出 `access_token` / `mac_key` / `diff`）或纯 JSON |
 | 🌗 **明暗主题** | Material 3，跟随系统 / 手动切换 |
@@ -44,6 +44,21 @@
 推送 `main` 或提 PR 会触发 [`.github/workflows/build.yml`](.github/workflows/build.yml)
 构建全平台产物；打 `v*` tag 会走
 [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动发布 Release 并附上所有产物。
+
+### 教材存到哪
+
+| 平台 | 落点 | 用户可见性 |
+|---|---|---|
+| Linux / macOS / Windows | `~/Downloads/tchMaterial/` | ✅ 文件管理器直接可见 |
+| Android | `Android/data/<包名>/files/Download/tchMaterial/` | ⚠️ 应用专属目录。Android 11+ 的分区存储下文件管理器通常进不去，请用应用内的「分享」导出 |
+| iOS | 应用沙盒内的 `Downloads/` | ⚠️ 需经分享或「文件」App 导出 |
+
+> Android 上有个坑值得记一笔：`getDownloadsPath()` **不是返回 null**，而是返回
+> `getExternalFilesDirs(DIRECTORY_DOWNLOADS)`。我最初按「Android 上不可用」实现，
+> 结果 FileProvider 只声明了内部目录，导致「分享能用、用系统程序打开失败」——
+> 因为 `share_plus` 会先把文件复制进自己的 cache，掩盖了路径不匹配。
+> 现在 `tch_file_paths.xml` 同时声明了两种根，并有
+> `test/android_file_provider_test.dart` 把 Dart 侧目录名与 XML 声明绑起来。
 
 ### 为什么 Web 不支持
 

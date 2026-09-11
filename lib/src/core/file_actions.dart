@@ -37,6 +37,9 @@ enum FileActionResult {
   /// 系统里没有能处理它的应用。
   noHandler,
 
+  /// 文件所在目录没有在 Android 的 FileProvider 里声明（配置问题，不是用户操作问题）。
+  pathNotShared,
+
   /// 其它失败。
   failed,
 }
@@ -47,6 +50,8 @@ extension FileActionResultMessage on FileActionResult {
         FileActionResult.unsupported => '当前平台不支持该操作',
         FileActionResult.fileMissing => '文件不存在，请先下载',
         FileActionResult.noHandler => '没有找到可以打开它的应用',
+        FileActionResult.pathNotShared =>
+          '文件位置不在可共享范围内（应用配置问题，请反馈）',
         FileActionResult.failed => '操作失败',
       };
 }
@@ -112,7 +117,9 @@ Future<FileActionResult> openFileExternally(File file) async {
     return launched ? FileActionResult.ok : FileActionResult.noHandler;
   } on PlatformException catch (error) {
     debugPrint('openFileExternally 失败: $error');
-    return FileActionResult.failed;
+    return error.code == 'path_not_shared'
+        ? FileActionResult.pathNotShared
+        : FileActionResult.failed;
   } catch (error) {
     debugPrint('openFileExternally 失败: $error');
     return FileActionResult.failed;

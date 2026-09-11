@@ -63,12 +63,21 @@ class SettingsStore {
 /// 两类数据分开存放：
 ///
 /// * **目录缓存**（约 24 MB 的 JSON）是纯内部数据，放在应用支持目录；
-/// * **下载的教材**放在用户可见的 `下载/tchMaterial`，这样文件管理器里能直接
-///   找到，也能直接交给第三方 PDF 阅读器打开，而不是埋在
+/// * **下载的教材**尽量放到系统的「下载」目录下，而不是埋在
 ///   `~/.local/share/<app-id>/` 这种没人找得到的地方。
 ///
-/// Android/iOS 上 `getDownloadsDirectory()` 不可用（系统不允许应用往共享下载
-/// 目录乱写），此时回退到应用私有目录。
+/// 实际落点按平台不同（**这一点必须和各平台的文件共享配置对齐**，
+/// 详见 `android/app/src/main/res/xml/tch_file_paths.xml`）：
+///
+/// | 平台 | 落点 | 用户可见性 |
+/// |---|---|---|
+/// | Linux / macOS / Windows | `~/Downloads/tchMaterial/` | 可见 |
+/// | Android | `<externalFilesDir>/Download/tchMaterial/`，即 `Android/data/<pkg>/files/Download/tchMaterial/` | 应用专属；Android 11+ 分区存储下文件管理器通常进不去，只能靠系统分享导出 |
+/// | iOS | 沙盒内的 `Downloads/` | 沙盒内，需经分享或「文件」App 导出 |
+///
+/// 注意 Android **不是**返回 null：`getDownloadsPath()` 实际返回
+/// `getExternalFilesDirs(DIRECTORY_DOWNLOADS)`；只有设备没有外部存储时才回退到
+/// 应用内部支持目录。两条分支都要能被 FileProvider 覆盖。
 class CacheStore {
   CacheStore._(this.root, this.booksDir, this._legacyBooksDir);
 
